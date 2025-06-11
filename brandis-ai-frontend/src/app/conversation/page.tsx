@@ -1,4 +1,4 @@
-import TextBox from "@/components/textBox";
+import TextBox from "@/components/TextBox";
 
 export default function Conversation() {
   return <div className="grid grid-cols-6 gap-2">

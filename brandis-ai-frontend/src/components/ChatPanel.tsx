@@ -2,14 +2,14 @@
 
 import { useState } from 'react';
 import { Message } from '@/types/chat';
-import ChatMessage from '@/components/ChatMessage';
-import TextBox from '@/components/TextBox';
+import ChatMessage from './ChatMessage';
+import TextBox from './TextBox';
 
-export default function Home() {
+export default function ChatPanel() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleNewMessage = async (content: string) => {
+  const handleSendMessage = async (content: string) => {
     // Add user message
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -63,8 +63,8 @@ export default function Home() {
           <ChatMessage key={msg.id} message={msg} />
         ))}
         {isLoading && (
-          <div className="flex justify-start mb-4">
-            <div className="bg-white border border-gray-300 rounded-lg p-4">
+          <div className="flex justify-start">
+            <div className="max-w-[80%] bg-gray-100 rounded-lg p-4">
               <div className="flex space-x-2">
                 <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
                 <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-100" />
@@ -73,13 +73,10 @@ export default function Home() {
             </div>
           </div>
         )}
-        {/* Only show the input field when not loading */}
-        {!isLoading && (
-          <div className="flex justify-end">
-            <TextBox onSendMessage={handleNewMessage} isLoading={isLoading} />
-          </div>
-        )}
+        <div className="flex justify-end">
+          <TextBox onSendMessage={handleSendMessage} isLoading={isLoading} />
+        </div>
       </div>
     </div>
   );
-}
+} 

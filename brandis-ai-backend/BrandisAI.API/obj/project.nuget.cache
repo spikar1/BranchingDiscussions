@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "FzFHBq+haRA=",
+  "success": true,
+  "projectFilePath": "D:\\Web Projects\\BranchingDiscussions\\brandis-ai-backend\\BrandisAI.API\\BrandisAI.API.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\steff\\.nuget\\packages\\microsoft.aspnetcore.openapi\\9.0.2\\microsoft.aspnetcore.openapi.9.0.2.nupkg.sha512",
+    "C:\\Users\\steff\\.nuget\\packages\\microsoft.openapi\\1.6.17\\microsoft.openapi.1.6.17.nupkg.sha512"
+  ],
+  "logs": []
+}

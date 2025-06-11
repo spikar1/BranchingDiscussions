@@ -1,0 +1,6 @@
+@BrandisAI.API_HostAddress = http://localhost:5198
+
+GET {{BrandisAI.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

@@ -39,3 +39,20 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# C# / .NET / Visual Studio / Rider
+**/bin/
+**/obj/
+**/.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.db
+*.log
+*.ncrunch*
+*.vshost.*
+
+# JetBrains Rider
+.idea/
+*.sln.iml
