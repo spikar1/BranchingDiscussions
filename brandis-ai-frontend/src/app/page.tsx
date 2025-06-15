@@ -1,54 +1,55 @@
 'use client';
 
 import { useState } from 'react';
-import { Message } from '@/types/chat';
+import { Message, Discussion, CreateDiscussionDto } from '@/types/chat';
 import ChatMessage from '@/components/ChatMessage';
 import TextBox from '@/components/TextBox';
 
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [discussions, setDiscussions] = useState<Discussion[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleNewMessage = async (content: string) => {
-    // Add user message
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      content,
-      role: 'user',
-      timestamp: new Date(),
-    };
-    setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
     try {
-      const response = await fetch('/api/chat', {
+      // Create a new discussion
+      const createDiscussionDto: CreateDiscussionDto = {
+        title: content,
+        userId: 'user123' // This should come from your auth system
+      };
+
+      const response = await fetch('/api/discussion', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ message: content }),
+        body: JSON.stringify(createDiscussionDto),
       });
 
-      if (!response.ok) throw new Error('Failed to get response');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
 
-      const data = await response.json();
+      const newDiscussion: Discussion = await response.json();
+      console.log('Created new discussion:', newDiscussion);
       
-      // Add AI response
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: data.message,
-        role: 'assistant',
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, aiMessage]);
+      // Update discussions state
+      setDiscussions(prev => [...prev, newDiscussion]);
+      
+      // Add the first message to the messages state
+      if (newDiscussion.messages.length > 0) {
+        setMessages(prev => [...prev, newDiscussion.messages[0]]);
+      }
     } catch (error) {
       console.error('Error:', error);
-      // Add error message
       const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: 'Sorry, I encountered an error. Please try again.',
-        role: 'assistant',
-        timestamp: new Date(),
+        id: Date.now().toString(),
+        content: 'Sorry, I encountered an error creating the discussion. Please try again.',
+        createdAt: new Date(),
+        isFromAI: true,
+        discussionId: 'error'
       };
       setMessages(prev => [...prev, errorMessage]);
     } finally {
@@ -56,8 +57,60 @@ export default function Home() {
     }
   };
 
+  const fetchDiscussions = async () => {
+    try {
+      const response = await fetch('/api/discussion', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const fetchedDiscussions: Discussion[] = await response.json();
+      console.log('Fetched discussions:', fetchedDiscussions);
+      setDiscussions(fetchedDiscussions);
+    } catch (error) {
+      console.error('Error fetching discussions:', error);
+    }
+  };
+
+  const handleDeleteDiscussion = async (id: string) => {
+    try {
+      const response = await fetch(`/api/discussion/${id}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      // Update discussions state
+      setDiscussions(prev => prev.filter(d => d.id !== id));
+    } catch (error) {
+      console.error('Error deleting discussion:', error);
+    }
+  };
+
   return (
     <div className="flex flex-col min-h-screen">
+      <button 
+        className="bg-blue-500 text-white p-2 rounded-md m-4" 
+        onClick={fetchDiscussions}
+      >
+        Refresh Discussions
+      </button>
+      <div className="flex flex-row p-4">
+        {discussions.map((discussion) => (
+          <div key={discussion.id} className="bg-gray-200 p-4 rounded-md m-2 flex flex-row">
+            <h2>{discussion.title}</h2>
+            <button className="bg-red-500 text-white p-2 rounded-md m-2 btn-danger" onClick={() => handleDeleteDiscussion(discussion.id)}>X</button> 
+          </div>
+        ))}
+      </div>
       <div className="flex-1 p-4 space-y-4">
         {messages.map((msg) => (
           <ChatMessage key={msg.id} message={msg} />
@@ -73,7 +126,6 @@ export default function Home() {
             </div>
           </div>
         )}
-        {/* Only show the input field when not loading */}
         {!isLoading && (
           <div className="flex justify-end">
             <TextBox onSendMessage={handleNewMessage} isLoading={isLoading} />
