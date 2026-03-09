@@ -11,9 +11,17 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// Configure OpenAI options
+builder.Services.Configure<OpenAIOptions>(
+    builder.Configuration.GetSection(OpenAIOptions.SectionName));
+
 // Register application and infrastructure services
 builder.Services.AddSingleton<IDiscussionRepository, InMemoryDiscussionRepository>();
-builder.Services.AddSingleton<IAIService, MockAIService>();
+
+// Register OpenAI service with HttpClient
+builder.Services.AddHttpClient<IAIService, OpenAIService>();
+
+// Register application service
 builder.Services.AddScoped<DiscussionService>();
 
 builder.Services.AddCors(options =>
@@ -36,6 +44,8 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
+app.UseRouting();
+
 app.UseCors();
 
 app.UseAuthorization();
@@ -43,8 +53,3 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}

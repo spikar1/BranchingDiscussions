@@ -141,3 +141,4 @@ orleans.codegen.cs
 
 # Microsoft Fakes
 FakesAssemblies/ 
+.fake
