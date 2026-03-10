@@ -16,6 +16,7 @@ export type PersistedMark = {
 
 export type QANodeData = {
   id: string;
+  title: string;
   userPrompt: string;
   aiResponse: string;
   keywords: SuggestedKeyword[];
@@ -27,11 +28,28 @@ export type QANodeData = {
   createdAt: Date;
 };
 
+export type ImageEntry = {
+  prompt: string;
+  title: string;
+  url: string;
+};
+
 export type ImageNodeData = {
   id: string;
   parentId: string;
   prompt: string;
+  title: string;
   imageUrl: string;
+  images: ImageEntry[];
+  context: string;
+  createdAt: Date;
+};
+
+export type NoteNodeData = {
+  id: string;
+  parentId: string;
+  content: string;
+  branchColor: string;
   createdAt: Date;
 };
 

@@ -20,10 +20,14 @@ type ExploreRequest = {
 };
 
 const SYSTEM_BRIEF =
-  'You are a knowledgeable tutor helping someone explore and learn. ' +
-  'Answer in exactly ONE sentence. Be precise and mention related concepts naturally so the learner can branch into them. ' +
-  'Only include a code example if the question explicitly asks for one — keep it to 1-3 lines in a fenced code block. ' +
-  'No bullet points, no numbered lists, no multi-paragraph answers. One sentence only.';
+  'You are a knowledgeable assistant helping someone explore and learn. ' +
+  'Match your response format to what the user is asking for:\n' +
+  '- **Concept/explanation**: Be concise — default to ONE sentence. Mention related concepts naturally.\n' +
+  '- **List/enumeration**: Respond with a markdown list (using "- " for each item). Keep items short.\n' +
+  '- **Verbatim content** (lyrics, poems, quotes, recipes, speeches, excerpts, formulas): ' +
+  'Provide the content DIRECTLY with no preamble, no commentary, no "Here are the lyrics" — just the content itself. ' +
+  'If the content is long, provide it in full. If you cannot provide the exact text (e.g. copyright), give the closest faithful version you can and note any uncertainty in a single short line at the end.\n' +
+  'Only include a code example if the question explicitly asks for one — keep it to 1-3 lines in a fenced code block.';
 
 const SYSTEM_EXPAND =
   'You are a knowledgeable tutor helping someone explore and learn. ' +
@@ -31,7 +35,7 @@ const SYSTEM_EXPAND =
   'Expand on the brief answer provided below with a thorough, clear explanation (4-8 sentences). ' +
   'Include relevant examples, nuances, or code examples where helpful. ' +
   'Use fenced code blocks with language tags for any code. ' +
-  'Write explanatory text as plain prose — no bullet points or numbered lists.';
+  'Use markdown lists (with "- ") when enumerating items. Otherwise write as plain prose.';
 
 export async function POST(req: Request) {
   try {
@@ -71,7 +75,7 @@ export async function POST(req: Request) {
     const completion = await openai.chat.completions.create({
       model: RESPONSE_MODEL,
       messages,
-      max_tokens: expand ? 600 : 100,
+      max_tokens: expand ? 600 : 500,
       temperature: 0.7,
     });
 
@@ -90,11 +94,13 @@ export async function POST(req: Request) {
         {
           role: 'system',
           content:
-            'Given an educational explanation, identify 3-6 key terms or concepts a learner might explore further. ' +
+            'Given a text, identify 3-6 key terms, concepts, or notable references a curious reader might want to explore further. ' +
+            'For lyrics/poems, pick thematic words, literary references, or cultural terms. ' +
+            'For explanations, pick concepts the learner could branch into. ' +
             'For each term, pick a hex color that people commonly associate with that concept (e.g. "fire" → "#e25822", "ocean" → "#006994", "memory" → "#8b5cf6"). ' +
             'Use muted, pleasant tones — avoid pure primary colors. ' +
             'Return ONLY a JSON array of objects: [{"term": "exact term", "hex": "#abcdef"}]. ' +
-            'Terms must appear exactly as in the text. No code syntax or variable names — only conceptual terms from prose.',
+            'Terms must appear exactly as in the text. No code syntax or variable names.',
         },
         { role: 'user', content: proseOnly },
       ],
@@ -134,7 +140,26 @@ export async function POST(req: Request) {
       .filter(Boolean)
       .sort((a, b) => a!.startIndex - b!.startIndex);
 
-    return NextResponse.json({ response, keywords });
+    let title = '';
+    try {
+      const titleCompletion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'Generate a very short title (2-5 words) that captures the topic of this Q&A. Return ONLY the title, no quotes, no punctuation at the end.',
+          },
+          { role: 'user', content: `Question: "${prompt}"\nAnswer: "${proseOnly.substring(0, 200)}"` },
+        ],
+        max_tokens: 15,
+        temperature: 0.5,
+      });
+      title = titleCompletion.choices[0]?.message?.content?.trim() ?? '';
+    } catch {
+      // fall back to empty — the UI will use the prompt as fallback
+    }
+
+    return NextResponse.json({ response, keywords, title });
   } catch (error) {
     console.error('Explore API error:', error);
     const message = error instanceof Error ? error.message : 'Unknown error';

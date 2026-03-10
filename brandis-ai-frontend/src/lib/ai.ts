@@ -14,6 +14,7 @@ type ExploreParams = {
 type ExploreResult = {
   response: string;
   keywords: SuggestedKeyword[];
+  title: string;
 };
 
 export async function explore(params: ExploreParams): Promise<ExploreResult> {
@@ -32,12 +33,13 @@ export async function explore(params: ExploreParams): Promise<ExploreResult> {
 }
 
 type ImagineParams = {
-  concept: string;
+  prompt: string;
   context?: string;
 };
 
 type ImagineResult = {
   imageUrl: string;
+  title: string;
 };
 
 export async function imagine(params: ImagineParams): Promise<ImagineResult> {

@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useState } from 'react';
 import {
   BaseEdge,
+  EdgeLabelRenderer,
   useInternalNode,
   type EdgeProps,
 } from '@xyflow/react';
@@ -10,12 +11,7 @@ import {
 function getNodeCenter(node: { position: { x: number; y: number }; measured?: { width?: number; height?: number } }) {
   const w = node.measured?.width ?? 380;
   const h = node.measured?.height ?? 200;
-  return {
-    x: node.position.x + w / 2,
-    y: node.position.y + h / 2,
-    w,
-    h,
-  };
+  return { x: node.position.x + w / 2, y: node.position.y + h / 2, w, h };
 }
 
 function getEdgePoints(
@@ -41,10 +37,7 @@ function getEdgePoints(
     const scaleY = sin !== 0 ? hh / Math.abs(sin) : Infinity;
     const scale = Math.min(scaleX, scaleY);
 
-    return {
-      x: cx + cos * scale,
-      y: cy + sin * scale,
-    };
+    return { x: cx + cos * scale, y: cy + sin * scale };
   }
 
   const sourcePoint = borderPoint(s.x, s.y, s.w, s.h, angle);
@@ -60,9 +53,11 @@ export default function FloatingEdge({
   style,
   markerEnd,
   markerStart,
+  data,
 }: EdgeProps) {
   const sourceNode = useInternalNode(source);
   const targetNode = useInternalNode(target);
+  const [hovered, setHovered] = useState(false);
 
   if (!sourceNode || !targetNode) return null;
 
@@ -73,13 +68,38 @@ export default function FloatingEdge({
 
   const path = `M ${sourcePoint.x},${sourcePoint.y} Q ${mx},${my} ${targetPoint.x},${targetPoint.y}`;
 
+  const label = (data as Record<string, unknown>)?.label as string | undefined;
+
   return (
-    <BaseEdge
-      id={id}
-      path={path}
-      style={style}
-      markerEnd={markerEnd}
-      markerStart={markerStart}
-    />
+    <>
+      <path
+        d={path}
+        fill="none"
+        stroke="transparent"
+        strokeWidth={20}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{ cursor: 'default' }}
+      />
+      <BaseEdge
+        id={id}
+        path={path}
+        style={style}
+        markerEnd={markerEnd}
+        markerStart={markerStart}
+      />
+      {hovered && label && (
+        <EdgeLabelRenderer>
+          <div
+            className="pointer-events-none absolute bg-gray-900/90 text-white text-xs px-2 py-1 rounded-md shadow-lg max-w-[200px] truncate"
+            style={{
+              transform: `translate(-50%, -50%) translate(${mx}px, ${my}px)`,
+            }}
+          >
+            {label}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
   );
 }

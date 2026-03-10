@@ -2,11 +2,14 @@
 
 import { ReactFlowProvider } from '@xyflow/react';
 import ExplorationCanvas from '@/components/ExplorationCanvas';
+import ErrorBoundary from '@/components/ErrorBoundary';
 
 export default function Home() {
   return (
-    <ReactFlowProvider>
-      <ExplorationCanvas />
-    </ReactFlowProvider>
+    <ErrorBoundary>
+      <ReactFlowProvider>
+        <ExplorationCanvas />
+      </ReactFlowProvider>
+    </ErrorBoundary>
   );
 }
