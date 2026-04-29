@@ -4,45 +4,22 @@ import { useCallback, useState, useMemo, useEffect, useRef } from 'react';
 import {
   useNodesState,
   useEdgesState,
-  MarkerType,
   type Node,
   type Edge,
 } from '@xyflow/react';
 
 import { type MarkPayload } from '@/components/QANode';
-import { QANodeData, ImageNodeData, NoteNodeData, PersistedMark } from '@/types/canvas';
+import { QANodeData, ImageNodeData, NoteNodeData } from '@/types/canvas';
 import { explore, imagine, getFollowUpQuestions } from '@/lib/ai';
 import { loadCanvas, debouncedSave, clearCanvas } from '@/lib/persistence';
-
-const ARROW_MARKER = {
-  type: MarkerType.ArrowClosed,
-  width: 16,
-  height: 16,
-};
-
-const RADIUS_BASE = 350;
-const RADIUS_GROWTH = 80;
-
-function generateId() {
-  return `node-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-}
-
-function getChildAngle(childIndex: number, totalSiblings: number): number {
-  if (totalSiblings === 1) return Math.PI / 2;
-  const spread = Math.min(Math.PI * 1.6, (Math.PI / 3) * totalSiblings);
-  const startAngle = (Math.PI / 2) - (spread / 2);
-  const step = totalSiblings > 1 ? spread / (totalSiblings - 1) : 0;
-  return startAngle + step * childIndex;
-}
-
-function findChildPosition(sourceNode: Node, existingSiblingCount: number): { x: number; y: number } {
-  const radius = RADIUS_BASE + existingSiblingCount * RADIUS_GROWTH;
-  const angle = getChildAngle(existingSiblingCount, existingSiblingCount + 1);
-  return {
-    x: sourceNode.position.x + Math.cos(angle) * radius,
-    y: sourceNode.position.y + Math.sin(angle) * radius,
-  };
-}
+import {
+  ARROW_MARKER,
+  appendPersistedMarks,
+  createEdge,
+  createQANodeData,
+  findChildPosition,
+  generateId,
+} from './canvasGraphUtils';
 
 export function useCanvasGraph() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
@@ -407,14 +384,12 @@ export function useCanvasGraph() {
           data: { ...imgData, isLoading: true },
         };
 
-        const newEdge: Edge = {
-          id: `edge-${nodeId}-${imgNodeId}`,
-          source: nodeId,
-          target: imgNodeId,
-          type: 'floating',
-          style: { stroke: '#818cf8', strokeWidth: 2, strokeDasharray: '6 3' },
-          markerEnd: { ...ARROW_MARKER, color: '#818cf8' },
-        };
+        const newEdge = createEdge(
+          nodeId,
+          imgNodeId,
+          { stroke: '#818cf8', strokeWidth: 2, strokeDasharray: '6 3' },
+          '#818cf8'
+        );
 
         setEdges((prev) => [...prev, newEdge]);
 
@@ -479,36 +454,17 @@ export function useCanvasGraph() {
           data: noteData,
         };
 
-        const newEdge: Edge = {
-          id: `edge-${sourceNodeId}-${nodeId}`,
-          source: sourceNodeId,
-          target: nodeId,
-          type: 'floating',
-          style: { stroke: hex, strokeWidth: 2, strokeDasharray: '4 4' },
-          markerEnd: { ...ARROW_MARKER, color: hex },
-          data: { label: fromText || 'Note' },
-        };
+        const newEdge = createEdge(
+          sourceNodeId,
+          nodeId,
+          { stroke: hex, strokeWidth: 2, strokeDasharray: '4 4' },
+          hex,
+          fromText || 'Note'
+        );
 
         setEdges((prev) => [...prev, newEdge]);
 
-        const hasMarks = marks.length > 0;
-        const updatedNodes = hasMarks
-          ? currentNodes.map((n) => {
-              if (n.id !== sourceNodeId) return n;
-              const existingMarks = (n.data as QANodeData).persistedMarks ?? [];
-              const newPersistedMarks: PersistedMark[] = marks.map((m) => ({
-                text: m.text,
-                startIndex: m.startIndex,
-                endIndex: m.endIndex,
-                color: hex,
-                targetNodeId: nodeId,
-              }));
-              return {
-                ...n,
-                data: { ...n.data, persistedMarks: [...existingMarks, ...newPersistedMarks] },
-              };
-            })
-          : currentNodes;
+        const updatedNodes = appendPersistedMarks(currentNodes, sourceNodeId, marks, hex, nodeId);
 
         return [...updatedNodes, newNode];
       });
@@ -543,20 +499,14 @@ export function useCanvasGraph() {
         const nodeId = generateId();
         const markedText = fromText || undefined;
 
-        const nodeData: QANodeData = {
+        const nodeData = createQANodeData({
           id: nodeId,
-          title: '',
-          userPrompt: prompt,
-          aiResponse: '',
-          followUpQuestions: [],
-          keywords: [],
-          persistedMarks: [],
+          prompt,
           parentId: sourceNodeId,
+          branchColor: hex,
           branchedFromId: fromText ? sourceNodeId : null,
           branchedFromText: fromText ?? null,
-          branchColor: hex,
-          createdAt: new Date(),
-        };
+        });
 
         const newNode: Node = {
           id: nodeId,
@@ -566,36 +516,17 @@ export function useCanvasGraph() {
           data: { ...nodeData, isLoading: true },
         };
 
-        const newEdge: Edge = {
-          id: `edge-${sourceNodeId}-${nodeId}`,
-          source: sourceNodeId,
-          target: nodeId,
-          type: 'floating',
-          style: { stroke: hex, strokeWidth: 2 },
-          markerEnd: { ...ARROW_MARKER, color: hex },
-          data: { label: fromText || prompt },
-        };
+        const newEdge = createEdge(
+          sourceNodeId,
+          nodeId,
+          { stroke: hex, strokeWidth: 2 },
+          hex,
+          fromText || prompt
+        );
 
         setEdges((prev) => [...prev, newEdge]);
 
-        const hasMarks = marks.length > 0;
-        const updatedNodes = hasMarks
-          ? currentNodes.map((n) => {
-              if (n.id !== sourceNodeId) return n;
-              const existingMarks = (n.data as QANodeData).persistedMarks ?? [];
-              const newPersistedMarks: PersistedMark[] = marks.map((m) => ({
-                text: m.text,
-                startIndex: m.startIndex,
-                endIndex: m.endIndex,
-                color: hex,
-                targetNodeId: nodeId,
-              }));
-              return {
-                ...n,
-                data: { ...n.data, persistedMarks: [...existingMarks, ...newPersistedMarks] },
-              };
-            })
-          : currentNodes;
+        const updatedNodes = appendPersistedMarks(currentNodes, sourceNodeId, marks, hex, nodeId);
 
         (async () => {
           try {
@@ -661,20 +592,13 @@ export function useCanvasGraph() {
         const position = findChildPosition(sourceNode, siblingCount);
         const nodeId = generateId();
 
-        const nodeData: QANodeData = {
+        const nodeData = createQANodeData({
           id: nodeId,
-          title: 'New Follow-Up Question',
-          userPrompt: prompt,
-          aiResponse: '',
-          followUpQuestions: [],
-          keywords: [],
-          persistedMarks: [],
+          prompt,
           parentId: sourceNodeId,
-          branchedFromId: null,
-          branchedFromText: null,
           branchColor: hex,
-          createdAt: new Date(),
-        };
+          title: 'New Follow-Up Question',
+        });
 
         const newNode: Node = {
           id: nodeId,
@@ -684,15 +608,13 @@ export function useCanvasGraph() {
           data: { ...nodeData, isAwaitingPrompt: true },
         };
 
-        const newEdge: Edge = {
-          id: `edge-${sourceNodeId}-${nodeId}`,
-          source: sourceNodeId,
-          target: nodeId,
-          type: 'floating',
-          style: { stroke: hex, strokeWidth: 2 },
-          markerEnd: { ...ARROW_MARKER, color: hex },
-          data: { label: prompt },
-        };
+        const newEdge = createEdge(
+          sourceNodeId,
+          nodeId,
+          { stroke: hex, strokeWidth: 2 },
+          hex,
+          prompt
+        );
 
         setEdges((prev) => [...prev, newEdge]);
         return [...currentNodes, newNode];
@@ -705,20 +627,12 @@ export function useCanvasGraph() {
     (prompt: string) => {
       const nodeId = generateId();
 
-      const nodeData: QANodeData = {
+      const nodeData = createQANodeData({
         id: nodeId,
-        title: '',
-        userPrompt: prompt,
-        aiResponse: '',
-        followUpQuestions: [],
-        keywords: [],
-        persistedMarks: [],
+        prompt,
         parentId: null,
-        branchedFromId: null,
-        branchedFromText: null,
         branchColor: null,
-        createdAt: new Date(),
-      };
+      });
 
       const newNode: Node = {
         id: nodeId,
@@ -808,20 +722,12 @@ export function useCanvasGraph() {
   const createNodeAt = useCallback(
     (position: { x: number; y: number }) => {
       const nodeId = generateId();
-      const nodeData: QANodeData = {
+      const nodeData = createQANodeData({
         id: nodeId,
-        title: '',
-        userPrompt: '',
-        aiResponse: '',
-        followUpQuestions: [],
-        keywords: [],
-        persistedMarks: [],
+        prompt: '',
         parentId: null,
-        branchedFromId: null,
-        branchedFromText: null,
         branchColor: null,
-        createdAt: new Date(),
-      };
+      });
       const newNode: Node = {
         id: nodeId,
         type: 'qa',
