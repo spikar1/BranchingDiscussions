@@ -15,10 +15,37 @@ type ExploreResult = {
   response: string;
   keywords: SuggestedKeyword[];
   title: string;
+  followUpQuestions: string[];
 };
 
 export async function explore(params: ExploreParams): Promise<ExploreResult> {
   const res = await fetch('/api/explore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }));
+    throw new Error(err.error ?? `HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+type FollowUpQuestionsParams = {
+  question: string;
+  answer: string;
+};
+
+type FollowUpQuestionsResult = {
+  followUpQuestions: string[];
+};
+
+export async function getFollowUpQuestions(
+  params: FollowUpQuestionsParams
+): Promise<FollowUpQuestionsResult> {
+  const res = await fetch('/api/followups', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),

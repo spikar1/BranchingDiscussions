@@ -7,6 +7,7 @@ const openai = new OpenAI({
 
 const RESPONSE_MODEL = 'gpt-4o-mini';
 const KEYWORD_MODEL = 'gpt-4o-mini';
+const FOLLOWUP_MODEL = 'gpt-4o-mini';
 
 type ExploreRequest = {
   prompt: string;
@@ -18,6 +19,20 @@ type ExploreRequest = {
   expand?: boolean;
   currentAnswer?: string;
 };
+
+function parseFollowUpQuestions(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((q): q is string => typeof q === 'string')
+      .map((q) => q.trim())
+      .filter((q) => q.length > 0)
+      .slice(0, 3);
+  } catch {
+    return [];
+  }
+}
 
 const SYSTEM_BRIEF =
   'You are a knowledgeable assistant helping someone explore and learn. ' +
@@ -159,7 +174,35 @@ export async function POST(req: Request) {
       // fall back to empty — the UI will use the prompt as fallback
     }
 
-    return NextResponse.json({ response, keywords, title });
+    let followUpQuestions: string[] = [];
+    try {
+      const followupCompletion = await openai.chat.completions.create({
+        model: FOLLOWUP_MODEL,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You generate follow-up questions that help a learner make meaningful progress quickly. ' +
+              'Given a question and answer, return ONLY a JSON array with exactly 3 short, high-value follow-up prompts. ' +
+              'Write each item as the user speaking directly to the AI (first person), e.g. "Can you explain...", "Help me understand...", "Show me...". ' +
+              'Questions should be practical, clarifying, and focused on next-step understanding. ' +
+              'Avoid vague, repetitive, or trivia questions. No markdown.',
+          },
+          {
+            role: 'user',
+            content: `Question: ${prompt}\nAnswer: ${proseOnly.substring(0, 1200)}`,
+          },
+        ],
+        max_tokens: 180,
+        temperature: 0.8,
+      });
+      const raw = followupCompletion.choices[0]?.message?.content?.trim() ?? '[]';
+      followUpQuestions = parseFollowUpQuestions(raw);
+    } catch {
+      followUpQuestions = [];
+    }
+
+    return NextResponse.json({ response, keywords, title, followUpQuestions });
   } catch (error) {
     console.error('Explore API error:', error);
     const message = error instanceof Error ? error.message : 'Unknown error';

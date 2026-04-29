@@ -1,5 +1,9 @@
 'use client';
 
+/**
+ * Lets users choose preset or custom hex colors for highlights and node styling.
+ * Start with `onChange` usage and `presetHexColors` to trace available palette behavior.
+ */
 import { useRef } from 'react';
 import { presetHexColors } from '@/lib/colors';
 

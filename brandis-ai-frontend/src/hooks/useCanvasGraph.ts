@@ -11,7 +11,7 @@ import {
 
 import { type MarkPayload } from '@/components/QANode';
 import { QANodeData, ImageNodeData, NoteNodeData, PersistedMark } from '@/types/canvas';
-import { explore, imagine } from '@/lib/ai';
+import { explore, imagine, getFollowUpQuestions } from '@/lib/ai';
 import { loadCanvas, debouncedSave, clearCanvas } from '@/lib/persistence';
 
 const ARROW_MARKER = {
@@ -193,7 +193,7 @@ export function useCanvasGraph() {
 
         (async () => {
           try {
-            const { response, keywords } = await explore({
+            const { response, keywords, followUpQuestions } = await explore({
               prompt: nodeData.userPrompt,
               markedText: nodeData.branchedFromText ?? undefined,
               parentContext: parentData?.aiResponse
@@ -210,6 +210,7 @@ export function useCanvasGraph() {
                   data: {
                     ...n.data,
                     aiResponse: response,
+                    followUpQuestions,
                     keywords,
                     persistedMarks: [],
                     isExpanding: false,
@@ -253,7 +254,7 @@ export function useCanvasGraph() {
 
         (async () => {
           try {
-            const { response, keywords, title } = await explore({
+            const { response, keywords, title, followUpQuestions } = await explore({
               prompt: nodeData.userPrompt,
               markedText: nodeData.branchedFromText ?? undefined,
               parentContext: parentData?.aiResponse
@@ -266,7 +267,14 @@ export function useCanvasGraph() {
                 const existing = n.data as QANodeData;
                 return {
                   ...n,
-                  data: { ...n.data, aiResponse: response, keywords, title: existing.title || title, isLoading: false },
+                  data: {
+                    ...n.data,
+                    aiResponse: response,
+                    followUpQuestions,
+                    keywords,
+                    title: existing.title || title,
+                    isLoading: false,
+                  },
                 };
               })
             );
@@ -280,6 +288,7 @@ export function useCanvasGraph() {
                   data: {
                     ...n.data,
                     aiResponse: 'Something went wrong.',
+                    followUpQuestions: [],
                     keywords: [],
                     isLoading: false,
                     hasFailed: true,
@@ -539,6 +548,7 @@ export function useCanvasGraph() {
           title: '',
           userPrompt: prompt,
           aiResponse: '',
+          followUpQuestions: [],
           keywords: [],
           persistedMarks: [],
           parentId: sourceNodeId,
@@ -589,7 +599,7 @@ export function useCanvasGraph() {
 
         (async () => {
           try {
-            const { response, keywords, title } = await explore({
+            const { response, keywords, title, followUpQuestions } = await explore({
               prompt,
               markedText,
               parentContext: sourceData.aiResponse
@@ -601,7 +611,14 @@ export function useCanvasGraph() {
                 if (n.id !== nodeId) return n;
                 return {
                   ...n,
-                  data: { ...n.data, aiResponse: response, keywords, title: title || prompt, isLoading: false },
+                  data: {
+                    ...n.data,
+                    aiResponse: response,
+                    followUpQuestions,
+                    keywords,
+                    title: title || prompt,
+                    isLoading: false,
+                  },
                 };
               })
             );
@@ -615,6 +632,7 @@ export function useCanvasGraph() {
                   data: {
                     ...n.data,
                     aiResponse: 'Something went wrong.',
+                    followUpQuestions: [],
                     keywords: [],
                     isLoading: false,
                     hasFailed: true,
@@ -631,6 +649,58 @@ export function useCanvasGraph() {
     [setNodes, setEdges]
   );
 
+  const handleCreateDraftFollowUp = useCallback(
+    (sourceNodeId: string, prompt: string, hex: string) => {
+      setNodes((currentNodes) => {
+        const sourceNode = currentNodes.find((n) => n.id === sourceNodeId);
+        if (!sourceNode) return currentNodes;
+
+        const siblingCount = currentNodes.filter(
+          (n) => (n.data as QANodeData).parentId === sourceNodeId
+        ).length;
+        const position = findChildPosition(sourceNode, siblingCount);
+        const nodeId = generateId();
+
+        const nodeData: QANodeData = {
+          id: nodeId,
+          title: 'New Follow-Up Question',
+          userPrompt: prompt,
+          aiResponse: '',
+          followUpQuestions: [],
+          keywords: [],
+          persistedMarks: [],
+          parentId: sourceNodeId,
+          branchedFromId: null,
+          branchedFromText: null,
+          branchColor: hex,
+          createdAt: new Date(),
+        };
+
+        const newNode: Node = {
+          id: nodeId,
+          type: 'qa',
+          position,
+          style: { width: 380 },
+          data: { ...nodeData, isAwaitingPrompt: true },
+        };
+
+        const newEdge: Edge = {
+          id: `edge-${sourceNodeId}-${nodeId}`,
+          source: sourceNodeId,
+          target: nodeId,
+          type: 'floating',
+          style: { stroke: hex, strokeWidth: 2 },
+          markerEnd: { ...ARROW_MARKER, color: hex },
+          data: { label: prompt },
+        };
+
+        setEdges((prev) => [...prev, newEdge]);
+        return [...currentNodes, newNode];
+      });
+    },
+    [setNodes, setEdges]
+  );
+
   const createRootNode = useCallback(
     (prompt: string) => {
       const nodeId = generateId();
@@ -640,6 +710,7 @@ export function useCanvasGraph() {
         title: '',
         userPrompt: prompt,
         aiResponse: '',
+        followUpQuestions: [],
         keywords: [],
         persistedMarks: [],
         parentId: null,
@@ -662,13 +733,20 @@ export function useCanvasGraph() {
 
       (async () => {
         try {
-          const { response, keywords, title } = await explore({ prompt });
+          const { response, keywords, title, followUpQuestions } = await explore({ prompt });
           setNodes((prev) =>
             prev.map((n) => {
               if (n.id !== nodeId) return n;
               return {
                 ...n,
-                data: { ...n.data, aiResponse: response, keywords, title: title || prompt, isLoading: false },
+                data: {
+                  ...n.data,
+                  aiResponse: response,
+                  followUpQuestions,
+                  keywords,
+                  title: title || prompt,
+                  isLoading: false,
+                },
               };
             })
           );
@@ -682,6 +760,7 @@ export function useCanvasGraph() {
                 data: {
                   ...n.data,
                   aiResponse: 'Something went wrong.',
+                  followUpQuestions: [],
                   keywords: [],
                   isLoading: false,
                   hasFailed: true,
@@ -734,6 +813,7 @@ export function useCanvasGraph() {
         title: '',
         userPrompt: '',
         aiResponse: '',
+        followUpQuestions: [],
         keywords: [],
         persistedMarks: [],
         parentId: null,
@@ -756,25 +836,46 @@ export function useCanvasGraph() {
 
   const handleSubmitRootPrompt = useCallback(
     (nodeId: string, prompt: string) => {
+      const targetNode = nodes.find((n) => n.id === nodeId);
+      if (!targetNode) return;
+      const targetData = targetNode.data as QANodeData;
+      const parentNode = targetData.parentId
+        ? nodes.find((n) => n.id === targetData.parentId)
+        : undefined;
+      const parentData = parentNode?.data as QANodeData | undefined;
+
       setNodes((prev) =>
-        prev.map((n) => {
-          if (n.id !== nodeId) return n;
-          return {
-            ...n,
-            data: { ...n.data, userPrompt: prompt, isLoading: true, isAwaitingPrompt: false },
-          };
-        })
+        prev.map((n) =>
+          n.id === nodeId
+            ? { ...n, data: { ...n.data, userPrompt: prompt, isLoading: true, isAwaitingPrompt: false } }
+            : n
+        )
+      );
+      setEdges((prev) =>
+        prev.map((e) => (e.target === nodeId ? { ...e, data: { ...e.data, label: prompt } } : e))
       );
 
       (async () => {
         try {
-          const { response, keywords, title } = await explore({ prompt });
+          const { response, keywords, title, followUpQuestions } = await explore({
+            prompt,
+            parentContext: parentData?.aiResponse
+              ? { question: parentData.userPrompt, answer: parentData.aiResponse }
+              : undefined,
+          });
           setNodes((prev) =>
             prev.map((n) => {
               if (n.id !== nodeId) return n;
               return {
                 ...n,
-                data: { ...n.data, aiResponse: response, keywords, title: title || prompt, isLoading: false },
+                data: {
+                  ...n.data,
+                  aiResponse: response,
+                  followUpQuestions,
+                  keywords,
+                  title: title || prompt,
+                  isLoading: false,
+                },
               };
             })
           );
@@ -792,7 +893,31 @@ export function useCanvasGraph() {
         }
       })();
     },
-    [setNodes]
+    [nodes, setNodes, setEdges]
+  );
+
+  const handleRefreshFollowUps = useCallback(
+    async (nodeId: string) => {
+      const target = nodes.find((n) => n.id === nodeId);
+      if (!target) return;
+      const nodeData = target.data as QANodeData;
+      if (!nodeData.userPrompt || !nodeData.aiResponse) return;
+
+      try {
+        const { followUpQuestions } = await getFollowUpQuestions({
+          question: nodeData.userPrompt,
+          answer: nodeData.aiResponse,
+        });
+        setNodes((prev) =>
+          prev.map((n) =>
+            n.id === nodeId ? { ...n, data: { ...n.data, followUpQuestions } } : n
+          )
+        );
+      } catch (err) {
+        console.error('Follow-up refresh failed:', err);
+      }
+    },
+    [nodes, setNodes]
   );
 
   const qaCallbacks = useMemo(() => ({
@@ -806,7 +931,9 @@ export function useCanvasGraph() {
     onNote: handleNote,
     onUpdateTitle: handleUpdateTitle,
     onSubmitRootPrompt: handleSubmitRootPrompt,
-  }), [handleAsk, handleRecolor, handleNodeRecolor, handleExpand, handleImagine, handleDelete, handleRetry, handleNote, handleUpdateTitle, handleSubmitRootPrompt]);
+    onRefreshFollowUps: handleRefreshFollowUps,
+    onCreateDraftFollowUp: handleCreateDraftFollowUp,
+  }), [handleAsk, handleRecolor, handleNodeRecolor, handleExpand, handleImagine, handleDelete, handleRetry, handleNote, handleUpdateTitle, handleSubmitRootPrompt, handleRefreshFollowUps, handleCreateDraftFollowUp]);
 
   const imageCallbacks = useMemo(() => ({
     onDelete: handleDelete,

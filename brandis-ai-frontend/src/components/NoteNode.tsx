@@ -1,5 +1,9 @@
 'use client';
 
+/**
+ * Provides editable note nodes for personal annotations, including inline edit and save flows.
+ * Focus on `handleSave` and callbacks `onUpdateNote` and `onDelete` to understand persistence and removal.
+ */
 import { memo, useState, useRef, useEffect } from 'react';
 import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
 import { NoteNodeData } from '@/types/canvas';

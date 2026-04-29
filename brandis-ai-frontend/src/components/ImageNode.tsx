@@ -1,5 +1,9 @@
 'use client';
 
+/**
+ * Renders image result nodes with prompt editing, regeneration, and thumbnail history switching.
+ * Check `handleRegenerate` plus callbacks `onRegenerate`, `onSelectImage`, and `onDelete` first.
+ */
 import { memo, useState } from 'react';
 import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
 import { ImageNodeData } from '@/types/canvas';

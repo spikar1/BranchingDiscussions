@@ -1,5 +1,9 @@
 'use client';
 
+/**
+ * Renders custom curved edges between nodes and displays a hover label for contextual edge metadata.
+ * Start with `getEdgePoints` for geometry and `hovered` state handling for label visibility behavior.
+ */
 import { useState } from 'react';
 import {
   BaseEdge,

@@ -1,5 +1,9 @@
 'use client';
 
+/**
+ * Provides a command-style search modal to locate nodes and pan/zoom focus to selected matches.
+ * Review keyboard listener setup and `results` with `handleSelect` to understand filtering and navigation.
+ */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useReactFlow, type Node } from '@xyflow/react';
 import { QANodeData, ImageNodeData, NoteNodeData } from '@/types/canvas';

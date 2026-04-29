@@ -1,6 +1,10 @@
 'use client';
 
-import { memo, useCallback, useState, useRef } from 'react';
+/**
+ * Implements the main Q&A node UI, including response rendering, branching actions, and highlight interactions.
+ * Read `handleSubmit`, `handleKeywordClick`, `handleMouseUp`, and `handleRefreshFollowUps` for core behavior.
+ */
+import { memo, useCallback, useState, useRef, useEffect } from 'react';
 import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
 import { QANodeData, SuggestedKeyword, PersistedMark } from '@/types/canvas';
 import { getNextHex, tint, contrastText, darken } from '@/lib/colors';
@@ -29,6 +33,8 @@ export type QANodeCallbacks = {
   onNote: (sourceNodeId: string, marks: MarkPayload[], hex: string, fromText?: string) => void;
   onUpdateTitle: (nodeId: string, newTitle: string) => void;
   onSubmitRootPrompt?: (nodeId: string, prompt: string) => void;
+  onRefreshFollowUps?: (nodeId: string) => Promise<void>;
+  onCreateDraftFollowUp?: (sourceNodeId: string, prompt: string, hex: string) => void;
 };
 
 type QANodeProps = NodeProps & {
@@ -159,6 +165,11 @@ function splitProseBlocks(text: string): ProseBlock[] {
   return blocks;
 }
 
+function getHighlightTextShadow(hex: string): string {
+  const shadowColor = darken(hex, 0.55);
+  return `0 0.6px 0 ${shadowColor}40, 0 1.2px 2px ${shadowColor}30`;
+}
+
 function QANode({ data }: QANodeProps) {
   const [promptText, setPromptText] = useState('');
   const [activeMarks, setActiveMarks] = useState<ActiveMark[]>([]);
@@ -171,8 +182,11 @@ function QANode({ data }: QANodeProps) {
   const [titleDraft, setTitleDraft] = useState('');
   const [showOriginalPrompt, setShowOriginalPrompt] = useState(false);
   const [rootPromptText, setRootPromptText] = useState('');
+  const [isRefreshingFollowUps, setIsRefreshingFollowUps] = useState(false);
+  const [followUpsCollapsed, setFollowUpsCollapsed] = useState(false);
   const responseRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const rootPromptTextareaRef = useRef<HTMLTextAreaElement>(null);
   const didSelectRef = useRef(false);
 
   const usedColorCount = new Set(data.persistedMarks.map((m) => m.color)).size;
@@ -180,6 +194,19 @@ function QANode({ data }: QANodeProps) {
   const activeHex = selectedHex ?? defaultHex;
 
   const nodeHex = data.branchColor || '#e5e7eb';
+
+  useEffect(() => {
+    if (data.isAwaitingPrompt) {
+      setRootPromptText(data.userPrompt ?? '');
+    }
+  }, [data.isAwaitingPrompt, data.userPrompt]);
+
+  useEffect(() => {
+    const el = rootPromptTextareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [rootPromptText, data.isAwaitingPrompt]);
 
   const handleMouseUp = useCallback(() => {
     const selection = window.getSelection();
@@ -237,6 +264,7 @@ function QANode({ data }: QANodeProps) {
     }));
 
     data.onAsk(data.id, prompt, markPayloads, activeHex, markedText || undefined);
+    setFollowUpsCollapsed(true);
     setPromptText('');
     setActiveMarks([]);
     setShowPrompt(false);
@@ -299,6 +327,25 @@ function QANode({ data }: QANodeProps) {
     setRecolorTarget(null);
     setShowNodeColor(false);
   }, []);
+
+  const handleAskFollowUp = useCallback((question: string) => {
+    if (data.onCreateDraftFollowUp) {
+      data.onCreateDraftFollowUp(data.id, question, defaultHex);
+    } else {
+      data.onAsk(data.id, question, [], defaultHex);
+    }
+    setFollowUpsCollapsed(true);
+  }, [data, defaultHex]);
+
+  const handleRefreshFollowUps = useCallback(async () => {
+    if (!data.onRefreshFollowUps || isRefreshingFollowUps) return;
+    setIsRefreshingFollowUps(true);
+    try {
+      await data.onRefreshFollowUps(data.id);
+    } finally {
+      setIsRefreshingFollowUps(false);
+    }
+  }, [data, isRefreshingFollowUps]);
 
   const handleClosePrompt = useCallback(() => {
     setShowPrompt(false);
@@ -487,16 +534,20 @@ function QANode({ data }: QANodeProps) {
               <div className="px-4 py-6 flex flex-col items-center gap-3 nodrag nopan">
                 <p className="text-sm text-gray-500">What would you like to explore?</p>
                 <div className="flex gap-2 w-full">
-                  <input
-                    type="text"
+                  <textarea
+                    ref={rootPromptTextareaRef}
                     value={rootPromptText}
                     onChange={(e) => setRootPromptText(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleRootPromptSubmit();
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleRootPromptSubmit();
+                      }
                       if (e.key === 'Escape') data.onDelete(data.id);
                     }}
                     placeholder="Ask anything..."
-                    className="flex-1 min-w-0 text-sm px-3 py-2 rounded-lg border border-gray-300 bg-white focus:outline-none focus:ring-2 focus:ring-gray-400 text-gray-700 placeholder:text-gray-400"
+                    rows={1}
+                    className="flex-1 min-w-0 text-sm px-3 py-2 rounded-lg border border-gray-300 bg-white focus:outline-none focus:ring-2 focus:ring-gray-400 text-gray-700 placeholder:text-gray-400 resize-none overflow-hidden"
                     autoFocus
                   />
                   <button
@@ -568,14 +619,22 @@ function QANode({ data }: QANodeProps) {
                                 key={`${keyPrefix}-p-${span.start}`}
                                 onClick={() => span.targetNodeId && handlePersistedMarkClick(span.targetNodeId)}
                                 className={`rounded-sm font-medium cursor-pointer ${isRecoloring ? 'ring-2 ring-gray-800 ring-offset-1' : ''}`}
-                                style={{ backgroundColor: tint(span.hex, 0.3), color: darken(span.hex, 0.3) }}
+                                style={{
+                                  backgroundColor: tint(span.hex, 0.3),
+                                  color: darken(span.hex, 0.42),
+                                  textShadow: getHighlightTextShadow(span.hex),
+                                }}
                               >{localText}</span>
                             );
                           }
                           if (span.type === 'active' && span.hex) {
                             return (
                               <span key={`${keyPrefix}-a-${span.start}`} className="rounded-sm font-medium"
-                                style={{ backgroundColor: tint(span.hex, 0.3), color: darken(span.hex, 0.3) }}
+                                style={{
+                                  backgroundColor: tint(span.hex, 0.3),
+                                  color: darken(span.hex, 0.42),
+                                  textShadow: getHighlightTextShadow(span.hex),
+                                }}
                               >{localText}</span>
                             );
                           }
@@ -586,7 +645,12 @@ function QANode({ data }: QANodeProps) {
                             return (
                               <span key={`${keyPrefix}-kw-${span.start}`}
                                 className="rounded-sm border-b-2 border-dashed cursor-pointer hover:opacity-80 transition-opacity"
-                                style={{ backgroundColor: `${kwHex}18`, color: kwHex, borderColor: `${kwHex}80` }}
+                                style={{
+                                  backgroundColor: `${kwHex}18`,
+                                  color: darken(kwHex, 0.38),
+                                  borderColor: `${kwHex}80`,
+                                  textShadow: getHighlightTextShadow(kwHex),
+                                }}
                                 onClick={() => handleKeywordClick(localText, absStart, absEnd, kwHex)}
                                 title={`Click to explore "${localText}"`}
                               >{localText}</span>
@@ -623,6 +687,48 @@ function QANode({ data }: QANodeProps) {
                     })}
                   </div>
                 </div>
+
+                {Array.isArray(data.followUpQuestions) && data.followUpQuestions.length > 0 && (
+                  <div
+                    className="px-4 py-2 border-t space-y-2"
+                    style={{ borderColor: tint(nodeHex, 0.15) }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs text-gray-500">Next useful questions</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setFollowUpsCollapsed((v) => !v)}
+                          className="text-xs text-gray-400 hover:text-gray-700 transition-colors"
+                          title={followUpsCollapsed ? 'Expand questions' : 'Collapse questions'}
+                        >
+                          {followUpsCollapsed ? 'Expand' : 'Collapse'}
+                        </button>
+                        <button
+                          onClick={handleRefreshFollowUps}
+                          disabled={isRefreshingFollowUps}
+                          className="text-xs text-gray-400 hover:text-gray-700 transition-colors disabled:opacity-50"
+                          title="Give new questions"
+                        >
+                          {isRefreshingFollowUps ? 'Refreshing...' : 'Give new questions'}
+                        </button>
+                      </div>
+                    </div>
+                    {!followUpsCollapsed && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {data.followUpQuestions.map((question, index) => (
+                          <button
+                            key={`${data.id}-followup-${index}`}
+                            onClick={() => handleAskFollowUp(question)}
+                            className="text-xs px-2 py-1 rounded-full border border-gray-200 bg-white text-gray-600 hover:text-gray-900 hover:border-gray-300 transition-colors"
+                            title="Ask this follow-up"
+                          >
+                            {question}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Action buttons */}
                 <div className="px-4 py-1.5 border-t flex justify-end gap-3"

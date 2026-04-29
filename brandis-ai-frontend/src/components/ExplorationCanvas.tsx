@@ -1,5 +1,9 @@
 'use client';
 
+/**
+ * Composes the full React Flow canvas experience, wiring node types, edge behavior, and startup UI.
+ * Inspect `useCanvasGraph`, `onConnect`, and `onPaneClick` to follow graph state updates and node creation.
+ */
 import { useCallback, useMemo } from 'react';
 import {
   ReactFlow,

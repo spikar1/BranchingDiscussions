@@ -19,6 +19,7 @@ export type QANodeData = {
   title: string;
   userPrompt: string;
   aiResponse: string;
+  followUpQuestions: string[];
   keywords: SuggestedKeyword[];
   persistedMarks: PersistedMark[];
   parentId: string | null;
