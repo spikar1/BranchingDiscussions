@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import { openaiFromRequest } from '@/app/api/_lib/openaiFromRequest';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+export const dynamic = 'force-dynamic';
 
 type ImagineRequest = {
   prompt: string;
@@ -12,6 +10,10 @@ type ImagineRequest = {
 
 export async function POST(req: Request) {
   try {
+    const openaiOrResponse = openaiFromRequest(req);
+    if (openaiOrResponse instanceof NextResponse) return openaiOrResponse;
+    const openai = openaiOrResponse;
+
     const { prompt, context } = (await req.json()) as ImagineRequest;
 
     if (!prompt?.trim()) {

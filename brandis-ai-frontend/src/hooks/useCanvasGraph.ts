@@ -13,6 +13,7 @@ import {
 import { type MarkPayload } from '@/components/QANode';
 import { QANodeData, ImageNodeData, NoteNodeData } from '@/types/canvas';
 import { explore, imagine, getFollowUpQuestions } from '@/lib/ai';
+import { withByokHeaders } from '@/lib/byok';
 import { loadCanvas, debouncedSave, clearCanvas } from '@/lib/persistence';
 import {
   applyCanvasGraphCommand,
@@ -201,16 +202,24 @@ export function useCanvasGraph() {
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [undo, redo]);
 
+  const fetchSparkQuestion = useCallback((signal?: AbortSignal) => {
+    fetch('/api/spark', { signal, headers: withByokHeaders() })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d: { question?: string }) => setSparkQuestion(d.question ?? ''))
+      .catch((err: { name?: string }) => {
+        if (err?.name !== 'AbortError') setSparkQuestion('How do black holes form?');
+      });
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
-    fetch('/api/spark', { signal: controller.signal })
-      .then((r) => r.json())
-      .then((d) => setSparkQuestion(d.question ?? ''))
-      .catch((err) => {
-        if (err.name !== 'AbortError') setSparkQuestion('How do black holes form?');
-      });
+    fetchSparkQuestion(controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [fetchSparkQuestion]);
+
+  const refreshSparkPrompt = useCallback(() => {
+    fetchSparkQuestion();
+  }, [fetchSparkQuestion]);
 
   const handleRecolor = useCallback(
     (nodeId: string, targetNodeId: string, newHex: string) => {
@@ -920,5 +929,6 @@ export function useCanvasGraph() {
     canRedo,
     undo,
     redo,
+    refreshSparkPrompt,
   };
 }

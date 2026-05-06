@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { openaiFromRequest } from '@/app/api/_lib/openaiFromRequest';
 
 const RESPONSE_MODEL = 'gpt-4o-mini';
 const KEYWORD_MODEL = 'gpt-4o-mini';
 const FOLLOWUP_MODEL = 'gpt-4o-mini';
+
+export const dynamic = 'force-dynamic';
 
 type ExploreRequest = {
   prompt: string;
@@ -54,6 +54,10 @@ const SYSTEM_EXPAND =
 
 export async function POST(req: Request) {
   try {
+    const openaiOrResponse = openaiFromRequest(req);
+    if (openaiOrResponse instanceof NextResponse) return openaiOrResponse;
+    const openai = openaiOrResponse;
+
     const { prompt, markedText, parentContext, expand, currentAnswer } =
       (await req.json()) as ExploreRequest;
 

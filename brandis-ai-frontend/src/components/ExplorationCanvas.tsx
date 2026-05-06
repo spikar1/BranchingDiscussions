@@ -22,6 +22,7 @@ import ImageNode from './ImageNode';
 import NoteNode from './NoteNode';
 import FloatingEdge from './FloatingEdge';
 import NodeSearch from './NodeSearch';
+import ByokSettingsPanel from './ByokSettingsPanel';
 import { useCanvasGraph } from '@/hooks/useCanvasGraph';
 
 export default function ExplorationCanvas() {
@@ -41,6 +42,7 @@ export default function ExplorationCanvas() {
     canRedo,
     undo,
     redo,
+    refreshSparkPrompt,
   } = useCanvasGraph();
 
   const { screenToFlowPosition } = useReactFlow();
@@ -80,6 +82,7 @@ export default function ExplorationCanvas() {
         defaultViewport={{ x: 0, y: 0, zoom: 0.8 }}
         proOptions={{ hideAttribution: true }}
       >
+        <ByokSettingsPanel onKeyChange={refreshSparkPrompt} />
         <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#d1d5db" />
         <Controls className="!bg-white !border-gray-200 !shadow-lg !rounded-lg" />
         <MiniMap
