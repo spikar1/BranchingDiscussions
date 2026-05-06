@@ -14,7 +14,16 @@ import { type MarkPayload } from '@/components/QANode';
 import { QANodeData, ImageNodeData, NoteNodeData } from '@/types/canvas';
 import { explore, imagine, getFollowUpQuestions } from '@/lib/ai';
 import { withByokHeaders } from '@/lib/byok';
-import { loadCanvas, debouncedSave, clearCanvas } from '@/lib/persistence';
+import {
+  appendNewCanvas,
+  debouncedSaveCanvas,
+  ensureCanvasRegistry,
+  flushPendingCanvasSave,
+  loadCanvasDocument,
+  readRegistry,
+  setActiveCanvasIdInRegistry,
+  type CanvasMeta,
+} from '@/lib/persistence';
 import {
   applyCanvasGraphCommand,
   type CanvasGraphCommand,
@@ -45,6 +54,22 @@ type CanvasStore = {
   timeline: CanvasRevisionTimeline;
 };
 
+/** After reload, never resume stuck spinners from persisted commands. */
+function stripTransientAILoadingFlags(graph: CanvasGraphState): CanvasGraphState {
+  return {
+    ...graph,
+    nodes: graph.nodes.map((n) => ({
+      ...n,
+      data: {
+        ...n.data,
+        isLoading: false,
+        isExpanding: false,
+        hasFailed: false,
+      },
+    })),
+  };
+}
+
 /** Interactions that don't mutate product graph state (selection) or are mid-gesture. */
 function isTransientNodeChange(changes: NodeChange<Node>[]): boolean {
   for (const c of changes) {
@@ -73,7 +98,10 @@ export function useCanvasGraph() {
 
   const [initialPrompt, setInitialPrompt] = useState('');
   const [sparkQuestion, setSparkQuestion] = useState('');
-  const hasRestored = useRef(false);
+  const [hydrated, setHydrated] = useState(false);
+  const activeCanvasIdRef = useRef<string | null>(null);
+  const [activeCanvasId, setActiveCanvasIdState] = useState<string | null>(null);
+  const [canvasList, setCanvasListState] = useState<CanvasMeta[]>([]);
 
   const commit = useCallback((cmd: CanvasGraphCommand) => {
     setStore(({ graph, timeline }) => ({
@@ -147,24 +175,53 @@ export function useCanvasGraph() {
   );
 
   useEffect(() => {
-    if (hasRestored.current) return;
-    hasRestored.current = true;
-    const saved = loadCanvas();
-    if (saved && saved.nodes.length > 0) {
-      const cmd: CanvasGraphCommand = { kind: 'set-graph', nodes: saved.nodes, edges: saved.edges };
-      setStore({
-        graph: applyCanvasGraphCommand({ nodes: [], edges: [] }, cmd),
-        timeline: appendRevision(emptyTimeline(), cmd),
-      });
-    }
+    const registry = ensureCanvasRegistry();
+    activeCanvasIdRef.current = registry.activeCanvasId;
+    setActiveCanvasIdState(registry.activeCanvasId);
+    setCanvasListState(registry.canvases);
+    const doc = loadCanvasDocument(registry.activeCanvasId);
+    const timeline = doc?.timeline ?? emptyTimeline();
+    setStore({
+      graph: stripTransientAILoadingFlags(replayTimeline(timeline)),
+      timeline,
+    });
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
-    if (!hasRestored.current) return;
-    if (store.graph.nodes.length > 0) {
-      debouncedSave(store.graph.nodes, store.graph.edges);
-    }
-  }, [store.graph.nodes, store.graph.edges]);
+    if (!hydrated || !activeCanvasIdRef.current) return;
+    debouncedSaveCanvas(activeCanvasIdRef.current, store.timeline);
+  }, [hydrated, store.timeline]);
+
+  const selectCanvas = useCallback((canvasId: string) => {
+    if (canvasId === activeCanvasIdRef.current) return;
+    flushPendingCanvasSave();
+    setActiveCanvasIdInRegistry(canvasId);
+    activeCanvasIdRef.current = canvasId;
+    setActiveCanvasIdState(canvasId);
+    setCanvasListState(readRegistry()?.canvases ?? []);
+    const doc = loadCanvasDocument(canvasId);
+    const timeline = doc?.timeline ?? emptyTimeline();
+    setStore({
+      graph: stripTransientAILoadingFlags(replayTimeline(timeline)),
+      timeline,
+    });
+    setInitialPrompt('');
+  }, []);
+
+  const createBlankCanvas = useCallback(() => {
+    flushPendingCanvasSave();
+    const nextName = `Canvas ${(readRegistry()?.canvases.length ?? 0) + 1}`;
+    const registry = appendNewCanvas(nextName);
+    activeCanvasIdRef.current = registry.activeCanvasId;
+    setActiveCanvasIdState(registry.activeCanvasId);
+    setCanvasListState(registry.canvases);
+    setStore({
+      graph: { nodes: [], edges: [] },
+      timeline: emptyTimeline(),
+    });
+    setInitialPrompt('');
+  }, []);
 
   useEffect(() => {
     const isTextEditingTarget = (t: EventTarget | null) => {
@@ -741,7 +798,6 @@ export function useCanvasGraph() {
       )
     ) {
       commit({ kind: 'set-graph', nodes: [], edges: [] });
-      clearCanvas();
     }
   }, [commit]);
 
@@ -930,5 +986,9 @@ export function useCanvasGraph() {
     undo,
     redo,
     refreshSparkPrompt,
+    canvasList,
+    activeCanvasId,
+    selectCanvas,
+    createBlankCanvas,
   };
 }

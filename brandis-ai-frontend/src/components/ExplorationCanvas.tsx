@@ -43,6 +43,10 @@ export default function ExplorationCanvas() {
     undo,
     redo,
     refreshSparkPrompt,
+    canvasList,
+    activeCanvasId,
+    selectCanvas,
+    createBlankCanvas,
   } = useCanvasGraph();
 
   const { screenToFlowPosition } = useReactFlow();
@@ -82,6 +86,36 @@ export default function ExplorationCanvas() {
         defaultViewport={{ x: 0, y: 0, zoom: 0.8 }}
         proOptions={{ hideAttribution: true }}
       >
+        {activeCanvasId && canvasList.length > 0 ? (
+          <Panel position="top-left">
+            <div className="flex gap-2 items-center">
+              <label htmlFor="canvas-picker" className="sr-only">
+                Active canvas
+              </label>
+              <select
+                id="canvas-picker"
+                value={activeCanvasId}
+                onChange={(e) => selectCanvas(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white/95 text-gray-800 shadow max-w-[10rem] sm:max-w-[14rem]"
+                title="Switch canvas"
+              >
+                {canvasList.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={createBlankCanvas}
+                className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 bg-white/95 text-gray-700 hover:text-gray-900 shadow"
+                title="Create a new blank canvas"
+              >
+                New
+              </button>
+            </div>
+          </Panel>
+        ) : null}
         <ByokSettingsPanel onKeyChange={refreshSparkPrompt} />
         <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#d1d5db" />
         <Controls className="!bg-white !border-gray-200 !shadow-lg !rounded-lg" />
