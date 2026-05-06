@@ -80,7 +80,7 @@ Possible: turn a dense answer into a structured list node while preserving prior
 
 | Phase | Focus |
 |-------|--------|
-| **P0 — Prove interaction** | **BYOK mandatory from first usable P0 build:** users supply provider API credentials; no reliance on developer-hosted inference keys alone. Plus **multiple named canvases**, polished branching canvas, **Summarize selection** + **Combine selection**, **pinned snapshots**, **history UI** foundation **§6**.<br><br>**P0 note — inference:** Align all AI entry points (**explore**, **follow-ups**, **imagine**, **spark**) with **§2** / **§6** before widening beta; env-based `OPENAI_API_KEY` is acceptable only as a **dev fallback**, not as the sole production path for real users **§10**. |
+| **P0 — Prove interaction** | **BYOK mandatory from first usable P0 build:** users supply provider API credentials; no reliance on developer-hosted inference keys alone. Plus **multiple named canvases**, polished branching canvas, **Summarize selection** (**§10** shipped locally), **Combine selection**, **pinned snapshots**, **history UI** foundation **§6**.<br><br>**P0 note — inference:** Align all AI entry points (**explore**, **follow-ups**, **imagine**, **spark**, **summarize**) with **§2** / **§6** before widening beta; env-based `OPENAI_API_KEY` is acceptable only as a **dev fallback**, not as the sole production path for real users **§10**. |
 | **P1 — Persistence & export** | Faithful **JSON (or similar) export/import** **per canvas**; revision log travels with canvas bundle; optional **bulk export** (**TBD**). |
 | **P2 — Accounts & sync** | Auth, server store, multi-device; **optional** local snapshot still supported. **Optional:** **view-only share links** (owner-minted), **no** co-editing. |
 | **P3 — Quiz & extensions** | Map-grounded quiz; later open-world quiz option; additional node types as thin shells. |
@@ -132,7 +132,7 @@ Track owner decisions here; remove bullets as they close.
 
 **Foundation (still true)**
 
-- **React Flow** canvas, **QANode** selection → branch, **image** and **note** nodes, **FloatingEdge**, **NodeSearch**, **Next API routes** for OpenAI (`explore`, `followups`, `imagine`, `spark`).
+- **React Flow** canvas, **QANode** selection → branch, **image** and **note** nodes, **FloatingEdge**, **NodeSearch**, **Next API routes** for OpenAI (`explore`, `followups`, `imagine`, `spark`, `summarize`).
 - **Domain fields** on QA payloads (`parentId`, `branchedFromId`, `branchedFromText`, `persistedMarks`) match the branching story.
 
 **Implemented toward P0 (local-only)**
@@ -143,10 +143,11 @@ Track owner decisions here; remove bullets as they close.
 - **Per-canvas persistence:** **`brandis-canvas-registry-v1`** registry plus **`brandis-canvas-doc-v1:<canvasId>`** documents in `localStorage`; legacy single-key snapshot migrates on first load (`persistence.ts`).
 - **Product vs view types:** `*ProductPayload` types separate domain fields from React Flow **position / optional width** (`types/canvas.ts`) — export/history spine **§4.4**.
 - **Retry / expand:** new model output is applied via **`supersede-qa-model-output`**; prior output is appended to **`answerRevisions`** on the node and surfaced in the QA UI — no silent discard of superseded text.
+- **Summarize selection** (**§4.2**): toolbar action when **≥2 nodes** are multi-selected; creates a new **Q&A node** with **`summarySourceIds`** plus dashed **“Summarize source”** edges to each input so sources stay on the canvas; calls **`/api/summarize`** with the same **BYOK / header key** pattern as other routes; graph mutation goes through **`CanvasGraphCommand`** (undo/redo).
 
 **Still missing or partial vs locked P0**
 
-- **Summarize selection** and **Combine selection** (**§4.2–4.3**): **not shipped** yet (toolbar actions, synthesized node kinds, pinned combine semantics).
+- **Combine selection** (**§4.3**): **not shipped** yet (second toolbar action, living synthesized node, **hide upstream by default**, **pinned snapshot** semantics, **show sources** via history).
 - **History / provenance UI beyond undo:** no **global timeline** or combine **“show sources”** surface yet; lineage is reconstructable from the timeline payload but not productized for users **§4.3–4.4**.
 - **Lossless export/import per canvas (P1 roadmap):** not yet a bundled format carrying the revision log from the snapshot store (**§5** Phase 2).
 - **`useCanvasGraph`:** command/timeline cores exist, but this hook remains the **Orchestration monolith** (async AI + graph + persistence). Expect further extraction for tests, multiplayer sync (**P2**), and hardened mutation coverage.

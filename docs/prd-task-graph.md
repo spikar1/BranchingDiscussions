@@ -6,8 +6,8 @@ Source: `docs/PRD.md`. Use **one ID per PR/session** where possible.
 
 Indicative only; **`docs/PRD.md` section 10** is the narrative source of truth.
 
-- **Shipped locally (prototype):** A (product vs RF types), B (command apply), C (per-canvas `localStorage` + registry + legacy migrate), D (timeline entries + replay), E (undo/redo UI + shortcuts), F (retry/expand retain prior output + timeline), G (layout commits on drag/resize end), H (dropdown picker + new canvas), L (BYOK header on API routes + settings UI; env key dev fallback).
-- **Still open for P0:** I (Summarize), J (Combine), K (provenance / global history UI beyond per-node QA revisions). P1: M, N. **D2** still refines provider policy after baseline OpenAI BYOK.
+- **Shipped locally (prototype):** A (product vs RF types), B (command apply), C (per-canvas `localStorage` + registry + legacy migrate), D (timeline entries + replay), E (undo/redo UI + shortcuts), F (retry/expand retain prior output + timeline), G (layout commits on drag/resize end), H (dropdown picker + new canvas), **I (Summarize selection — multi-select, new QA node, source edges, `/api/summarize`)**, L (BYOK header on API routes + settings UI; env key dev fallback).
+- **Still open for P0:** J (Combine), K (provenance / global history UI beyond per-node QA revisions). P1: M, N. **D2** still refines provider policy after baseline OpenAI BYOK.
 
 ## Owner decisions (§9 — do not implement without answers)
 
@@ -22,7 +22,7 @@ Indicative only; **`docs/PRD.md` section 10** is the narrative source of truth.
 
 ## P0 — Prove interaction
 
-**Inference (§5):** **BYOK is mandatory** from the first usable P0 build—no production path that relies **only** on developer-hosted keys. Align **`explore`**, **`followups`**, **`imagine`**, **`spark`** with §2 / §6 before widening beta. Env **`OPENAI_API_KEY`** = **dev fallback only**, not the sole real-user path (§10).
+**Inference (§5):** **BYOK is mandatory** from the first usable P0 build—no production path that relies **only** on developer-hosted keys. Align **`explore`**, **`followups`**, **`imagine`**, **`spark`**, **`summarize`** with §2 / §6 before widening beta. Env **`OPENAI_API_KEY`** = **dev fallback only**, not the sole real-user path (§10).
 
 | ID | Task | Depends on |
 |----|------|------------|
@@ -34,12 +34,12 @@ Indicative only; **`docs/PRD.md` section 10** is the narrative source of truth.
 | F | **Retry / expand / regenerate**: append revision, not in-place replace (§10 gap) | D |
 | G | **Layout**: position + explicit resize → revision | D |
 | H | Canvas **switch UI** (gallery / tabs / picker — UX TBD) | C |
-| I | **Summarize selection**: multi-select → new node + input refs; inputs stay visible | B, D |
+| I | **Summarize selection**: multi-select → new node + input refs; inputs stay visible — **shipped** (§10) | B, D |
 | J | **Combine selection**: one living node; inputs hidden default; pinned snapshot; show sources | I, D |
 | K | **History / provenance UI** (revisions, sources for combine) | J, E |
-| L | **BYOK (P0 blocker):** user-supplied key on **all four** AI entry points above, via **proxied** API routes; keys not in client bundle/logs. **D2** later refines multi-provider + allowed-model list | — |
+| L | **BYOK (P0 blocker):** user-supplied key on **all** AI entry points above (incl. **`summarize`**), via **proxied** API routes; keys not in client bundle/logs. **D2** later refines multi-provider + allowed-model list | — |
 
-**Parallel tracks after A:** core graph `B→D→E,F,G,I→J→K` · multi-canvas `C→H` · **L in parallel (P0 gate for real users/beta)** · **D2** extends provider/model policy after baseline BYOK.
+**Parallel tracks after A:** core graph `B→D→E,F,G,I→J→K` (**I** shipped §10) · multi-canvas `C→H` · **L in parallel (P0 gate for real users/beta)** · **D2** extends provider/model policy after baseline BYOK.
 
 ---
 
@@ -75,7 +75,7 @@ Indicative only; **`docs/PRD.md` section 10** is the narrative source of truth.
 ## Dependency sketch
 
 ```
-A → B → D → E, F, G, I → J → K
+A → B → D → E, F, G, I → J → K   (I shipped — Summarize §10)
 C → H
 L  (P0 gate: real users need user key path on all routes; env key dev-only §5)
 D2 (extends/refines L: providers + allowlist §9)
