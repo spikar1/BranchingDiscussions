@@ -21,6 +21,18 @@ export type PersistedMark = {
   targetNodeId: string;
 };
 
+/** Prior model output before retry / expand (Task F, §4.4 / §10). */
+export type QAModelOutputRevision = {
+  id: string;
+  supersededAt: string;
+  source: 'retry' | 'expand';
+  aiResponse: string;
+  title: string;
+  followUpQuestions: string[];
+  keywords: SuggestedKeyword[];
+  persistedMarks: PersistedMark[];
+};
+
 /** Domain Q&A fields only (historical/export spine). */
 export type QAProductPayload = {
   id: string;
@@ -30,6 +42,8 @@ export type QAProductPayload = {
   followUpQuestions: string[];
   keywords: SuggestedKeyword[];
   persistedMarks: PersistedMark[];
+  /** Superseded answers kept for provenance and lossless persistence (timeline is in-memory today). */
+  answerRevisions: QAModelOutputRevision[];
   parentId: string | null;
   branchedFromId: string | null;
   branchedFromText: string | null;

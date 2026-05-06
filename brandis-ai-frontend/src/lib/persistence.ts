@@ -9,6 +9,14 @@ type PersistedState = {
   savedAt: string;
 };
 
+function normalizeLoadedNode(node: Node): Node {
+  if (node.type !== 'qa') return node;
+  const data = node.data as Record<string, unknown>;
+  const rev = data.answerRevisions;
+  if (Array.isArray(rev)) return node;
+  return { ...node, data: { ...data, answerRevisions: [] } };
+}
+
 export function saveCanvas(nodes: Node[], edges: Edge[]) {
   try {
     const clean = nodes.map((n) => ({
@@ -32,7 +40,7 @@ export function loadCanvas(): { nodes: Node[]; edges: Edge[] } | null {
     if (!raw) return null;
     const state: PersistedState = JSON.parse(raw);
     if (!state.nodes?.length) return null;
-    return { nodes: state.nodes, edges: state.edges };
+    return { nodes: state.nodes.map(normalizeLoadedNode), edges: state.edges };
   } catch {
     return null;
   }

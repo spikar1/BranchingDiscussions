@@ -5,6 +5,7 @@ import {
   type ImageProductPayload,
   type NoteProductPayload,
   type PersistedMark,
+  type QAModelOutputRevision,
   type QAProductPayload,
 } from '@/types/canvas';
 
@@ -33,6 +34,20 @@ export function geometryFromReactFlowNode(node: Node): CanvasNodeGeometry {
   };
 }
 
+function coerceAnswerRevisions(raw: unknown): QAModelOutputRevision[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (r): r is QAModelOutputRevision =>
+      r != null &&
+      typeof r === 'object' &&
+      typeof (r as QAModelOutputRevision).id === 'string' &&
+      typeof (r as QAModelOutputRevision).supersededAt === 'string' &&
+      ((r as QAModelOutputRevision).source === 'retry' ||
+        (r as QAModelOutputRevision).source === 'expand') &&
+      typeof (r as QAModelOutputRevision).aiResponse === 'string'
+  );
+}
+
 export function qaPayloadFromFlowData(
   raw: QAProductPayload & Record<string, unknown>
 ): QAProductPayload {
@@ -44,6 +59,7 @@ export function qaPayloadFromFlowData(
     followUpQuestions: raw.followUpQuestions,
     keywords: raw.keywords,
     persistedMarks: raw.persistedMarks,
+    answerRevisions: coerceAnswerRevisions(raw.answerRevisions),
     parentId: raw.parentId,
     branchedFromId: raw.branchedFromId,
     branchedFromText: raw.branchedFromText,
@@ -215,6 +231,7 @@ export function createQANodeData(input: {
     followUpQuestions: [],
     keywords: [],
     persistedMarks: [],
+    answerRevisions: [],
     parentId: input.parentId,
     branchedFromId: input.branchedFromId ?? null,
     branchedFromText: input.branchedFromText ?? null,

@@ -24,9 +24,11 @@ import type {
   ImageNodeRuntimeFlags,
   ImageProductPayload,
   NoteProductPayload,
+  PersistedMark,
   QAProductPayload,
   QANodeRuntimeFlags,
   QANodeData,
+  SuggestedKeyword,
 } from '@/types/canvas';
 
 import { ARROW_MARKER, appendPersistedMarks } from './canvasGraphUtils';
@@ -49,6 +51,18 @@ export type CanvasGraphCommand =
       kind: 'patch-qa-data';
       nodeId: string;
       patch: Partial<QAProductPayload & QANodeRuntimeFlags>;
+    }
+  | {
+      kind: 'supersede-qa-model-output';
+      nodeId: string;
+      source: 'retry' | 'expand';
+      output: {
+        aiResponse: string;
+        followUpQuestions: string[];
+        keywords: SuggestedKeyword[];
+        title?: string;
+        persistedMarks?: PersistedMark[];
+      };
     }
   | {
       kind: 'patch-image-data';
@@ -190,6 +204,52 @@ export function applyCanvasGraphCommand(
           return { ...n, data: { ...n.data, ...cmd.patch } };
         }),
       };
+
+    case 'supersede-qa-model-output': {
+      return {
+        ...state,
+        nodes: state.nodes.map((n) => {
+          if (n.id !== cmd.nodeId || n.type !== 'qa') return n;
+          const d = n.data as QANodeData & QANodeRuntimeFlags;
+          const prior = (d.aiResponse ?? '').trim();
+          const archived =
+            prior.length > 0
+              ? [
+                  ...(d.answerRevisions ?? []),
+                  {
+                    id: crypto.randomUUID(),
+                    supersededAt: new Date().toISOString(),
+                    source: cmd.source,
+                    aiResponse: d.aiResponse,
+                    title: d.title,
+                    followUpQuestions: [...(d.followUpQuestions ?? [])],
+                    keywords: [...(d.keywords ?? [])],
+                    persistedMarks: [...(d.persistedMarks ?? [])],
+                  },
+                ]
+              : [...(d.answerRevisions ?? [])];
+
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              answerRevisions: archived,
+              aiResponse: cmd.output.aiResponse,
+              followUpQuestions: cmd.output.followUpQuestions,
+              keywords: cmd.output.keywords,
+              ...(cmd.output.title !== undefined ? { title: cmd.output.title } : {}),
+              persistedMarks:
+                cmd.output.persistedMarks !== undefined
+                  ? cmd.output.persistedMarks
+                  : d.persistedMarks,
+              isLoading: false,
+              isExpanding: false,
+              hasFailed: false,
+            },
+          };
+        }),
+      };
+    }
 
     case 'patch-image-data':
       return {

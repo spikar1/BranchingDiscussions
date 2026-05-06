@@ -198,14 +198,14 @@ export function useCanvasGraph() {
             currentAnswer: nodeData.aiResponse,
           });
           commit({
-            kind: 'patch-qa-data',
+            kind: 'supersede-qa-model-output',
             nodeId,
-            patch: {
+            source: 'expand',
+            output: {
               aiResponse: response,
               followUpQuestions,
               keywords,
               persistedMarks: [],
-              isExpanding: false,
             },
           });
         } catch (err) {
@@ -232,7 +232,7 @@ export function useCanvasGraph() {
       commit({
         kind: 'patch-qa-data',
         nodeId,
-        patch: { isLoading: true, hasFailed: false, aiResponse: '' },
+        patch: { isLoading: true, hasFailed: false },
       });
 
       (async () => {
@@ -245,14 +245,14 @@ export function useCanvasGraph() {
               : undefined,
           });
           commit({
-            kind: 'patch-qa-data',
+            kind: 'supersede-qa-model-output',
             nodeId,
-            patch: {
+            source: 'retry',
+            output: {
               aiResponse: response,
               followUpQuestions,
               keywords,
               title: nodeData.title || title,
-              isLoading: false,
             },
           });
         } catch (err) {
@@ -261,9 +261,6 @@ export function useCanvasGraph() {
             kind: 'patch-qa-data',
             nodeId,
             patch: {
-              aiResponse: 'Something went wrong.',
-              followUpQuestions: [],
-              keywords: [],
               isLoading: false,
               hasFailed: true,
             },
