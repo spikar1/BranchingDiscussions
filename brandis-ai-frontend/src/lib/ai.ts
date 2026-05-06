@@ -1,4 +1,5 @@
 import { SuggestedKeyword } from '@/types/canvas';
+import { withByokHeaders } from '@/lib/byok';
 
 type ExploreParams = {
   prompt: string;
@@ -21,7 +22,7 @@ type ExploreResult = {
 export async function explore(params: ExploreParams): Promise<ExploreResult> {
   const res = await fetch('/api/explore', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withByokHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(params),
   });
 
@@ -47,7 +48,7 @@ export async function getFollowUpQuestions(
 ): Promise<FollowUpQuestionsResult> {
   const res = await fetch('/api/followups', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withByokHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(params),
   });
 
@@ -72,7 +73,7 @@ type ImagineResult = {
 export async function imagine(params: ImagineParams): Promise<ImagineResult> {
   const res = await fetch('/api/imagine', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withByokHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(params),
   });
 

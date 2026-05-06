@@ -2,385 +2,469 @@
 
 import { useCallback, useState, useMemo, useEffect, useRef } from 'react';
 import {
-  useNodesState,
-  useEdgesState,
   MarkerType,
-  type Node,
+  type Connection,
   type Edge,
+  type EdgeChange,
+  type Node,
+  type NodeChange,
 } from '@xyflow/react';
 
 import { type MarkPayload } from '@/components/QANode';
-import { QANodeData, ImageNodeData, NoteNodeData, PersistedMark } from '@/types/canvas';
+import { QANodeData, ImageNodeData, NoteNodeData } from '@/types/canvas';
 import { explore, imagine, getFollowUpQuestions } from '@/lib/ai';
-import { loadCanvas, debouncedSave, clearCanvas } from '@/lib/persistence';
+import { withByokHeaders } from '@/lib/byok';
+import {
+  appendNewCanvas,
+  debouncedSaveCanvas,
+  ensureCanvasRegistry,
+  flushPendingCanvasSave,
+  loadCanvasDocument,
+  readRegistry,
+  setActiveCanvasIdInRegistry,
+  type CanvasMeta,
+} from '@/lib/persistence';
+import {
+  applyCanvasGraphCommand,
+  type CanvasGraphCommand,
+  type CanvasGraphState,
+} from './canvasGraphCommands';
+import {
+  appendRevision,
+  canRedoTimeline,
+  canUndoTimeline,
+  emptyTimeline,
+  redoTimeline,
+  replayTimeline,
+  undoTimeline,
+  type CanvasRevisionTimeline,
+} from './canvasRevisionTimeline';
+import {
+  createEdge,
+  createImageReactFlowNode,
+  createNoteReactFlowNode,
+  createQAReactFlowNode,
+  createQANodeData,
+  findChildPosition,
+  generateId,
+} from './canvasGraphUtils';
 
-const ARROW_MARKER = {
-  type: MarkerType.ArrowClosed,
-  width: 16,
-  height: 16,
+type CanvasStore = {
+  graph: CanvasGraphState;
+  timeline: CanvasRevisionTimeline;
 };
 
-const RADIUS_BASE = 350;
-const RADIUS_GROWTH = 80;
-
-function generateId() {
-  return `node-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-}
-
-function getChildAngle(childIndex: number, totalSiblings: number): number {
-  if (totalSiblings === 1) return Math.PI / 2;
-  const spread = Math.min(Math.PI * 1.6, (Math.PI / 3) * totalSiblings);
-  const startAngle = (Math.PI / 2) - (spread / 2);
-  const step = totalSiblings > 1 ? spread / (totalSiblings - 1) : 0;
-  return startAngle + step * childIndex;
-}
-
-function findChildPosition(sourceNode: Node, existingSiblingCount: number): { x: number; y: number } {
-  const radius = RADIUS_BASE + existingSiblingCount * RADIUS_GROWTH;
-  const angle = getChildAngle(existingSiblingCount, existingSiblingCount + 1);
+/** After reload, never resume stuck spinners from persisted commands. */
+function stripTransientAILoadingFlags(graph: CanvasGraphState): CanvasGraphState {
   return {
-    x: sourceNode.position.x + Math.cos(angle) * radius,
-    y: sourceNode.position.y + Math.sin(angle) * radius,
+    ...graph,
+    nodes: graph.nodes.map((n) => ({
+      ...n,
+      data: {
+        ...n.data,
+        isLoading: false,
+        isExpanding: false,
+        hasFailed: false,
+      },
+    })),
   };
 }
 
+/** Interactions that don't mutate product graph state (selection) or are mid-gesture. */
+function isTransientNodeChange(changes: NodeChange<Node>[]): boolean {
+  for (const c of changes) {
+    if (c.type === 'position' && c.dragging === true) return true;
+    if (c.type === 'dimensions' && c.resizing === true) return true;
+  }
+  if (changes.length > 0 && changes.every((c) => c.type === 'select')) {
+    return true;
+  }
+  return false;
+}
+
+function isTransientEdgeChange(changes: EdgeChange<Edge>[]): boolean {
+  return changes.length > 0 && changes.every((c) => c.type === 'select');
+}
+
 export function useCanvasGraph() {
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [store, setStore] = useState<CanvasStore>({
+    graph: { nodes: [], edges: [] },
+    timeline: emptyTimeline(),
+  });
+  const storeRef = useRef(store);
+  useEffect(() => {
+    storeRef.current = store;
+  }, [store]);
+
   const [initialPrompt, setInitialPrompt] = useState('');
   const [sparkQuestion, setSparkQuestion] = useState('');
-  const hasRestored = useRef(false);
+  const [hydrated, setHydrated] = useState(false);
+  const activeCanvasIdRef = useRef<string | null>(null);
+  const [activeCanvasId, setActiveCanvasIdState] = useState<string | null>(null);
+  const [canvasList, setCanvasListState] = useState<CanvasMeta[]>([]);
+
+  const commit = useCallback((cmd: CanvasGraphCommand) => {
+    setStore(({ graph, timeline }) => ({
+      graph: applyCanvasGraphCommand(graph, cmd),
+      timeline: appendRevision(timeline, cmd),
+    }));
+  }, []);
+
+  const undo = useCallback(() => {
+    setStore(({ graph, timeline }) => {
+      const nextTimeline = undoTimeline(timeline);
+      if (!nextTimeline) return { graph, timeline };
+      return { graph: replayTimeline(nextTimeline), timeline: nextTimeline };
+    });
+  }, []);
+
+  const redo = useCallback(() => {
+    setStore(({ graph, timeline }) => {
+      const nextTimeline = redoTimeline(timeline);
+      if (!nextTimeline) return { graph, timeline };
+      return { graph: replayTimeline(nextTimeline), timeline: nextTimeline };
+    });
+  }, []);
+
+  const applyTransient = useCallback((cmd: CanvasGraphCommand) => {
+    setStore(({ graph, timeline }) => ({
+      graph: applyCanvasGraphCommand(graph, cmd),
+      timeline,
+    }));
+  }, []);
+
+  const onNodesChange = useCallback(
+    (changes: NodeChange<Node>[]) => {
+      const cmd: CanvasGraphCommand = { kind: 'react-flow-node-changes', changes };
+      if (isTransientNodeChange(changes)) {
+        applyTransient(cmd);
+      } else {
+        commit(cmd);
+      }
+    },
+    [commit, applyTransient]
+  );
+
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange<Edge>[]) => {
+      const cmd: CanvasGraphCommand = { kind: 'react-flow-edge-changes', changes };
+      if (isTransientEdgeChange(changes)) {
+        applyTransient(cmd);
+      } else {
+        commit(cmd);
+      }
+    },
+    [commit, applyTransient]
+  );
+
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      const newEdge: Edge = {
+        id: `edge-${connection.source}-${connection.target}-${Date.now()}`,
+        source: connection.source,
+        target: connection.target,
+        sourceHandle: connection.sourceHandle,
+        targetHandle: connection.targetHandle,
+        type: 'floating',
+        style: { stroke: '#94a3b8', strokeWidth: 2 },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#94a3b8' },
+      };
+      commit({ kind: 'add-edge', edge: newEdge });
+    },
+    [commit]
+  );
 
   useEffect(() => {
-    if (hasRestored.current) return;
-    hasRestored.current = true;
-    const saved = loadCanvas();
-    if (saved && saved.nodes.length > 0) {
-      setNodes(saved.nodes);
-      setEdges(saved.edges);
-    }
-  }, [setNodes, setEdges]);
+    const registry = ensureCanvasRegistry();
+    activeCanvasIdRef.current = registry.activeCanvasId;
+    setActiveCanvasIdState(registry.activeCanvasId);
+    setCanvasListState(registry.canvases);
+    const doc = loadCanvasDocument(registry.activeCanvasId);
+    const timeline = doc?.timeline ?? emptyTimeline();
+    setStore({
+      graph: stripTransientAILoadingFlags(replayTimeline(timeline)),
+      timeline,
+    });
+    setHydrated(true);
+  }, []);
 
   useEffect(() => {
-    if (!hasRestored.current) return;
-    if (nodes.length > 0) {
-      debouncedSave(nodes, edges);
-    }
-  }, [nodes, edges]);
+    if (!hydrated || !activeCanvasIdRef.current) return;
+    debouncedSaveCanvas(activeCanvasIdRef.current, store.timeline);
+  }, [hydrated, store.timeline]);
+
+  const selectCanvas = useCallback((canvasId: string) => {
+    if (canvasId === activeCanvasIdRef.current) return;
+    flushPendingCanvasSave();
+    setActiveCanvasIdInRegistry(canvasId);
+    activeCanvasIdRef.current = canvasId;
+    setActiveCanvasIdState(canvasId);
+    setCanvasListState(readRegistry()?.canvases ?? []);
+    const doc = loadCanvasDocument(canvasId);
+    const timeline = doc?.timeline ?? emptyTimeline();
+    setStore({
+      graph: stripTransientAILoadingFlags(replayTimeline(timeline)),
+      timeline,
+    });
+    setInitialPrompt('');
+  }, []);
+
+  const createBlankCanvas = useCallback(() => {
+    flushPendingCanvasSave();
+    const nextName = `Canvas ${(readRegistry()?.canvases.length ?? 0) + 1}`;
+    const registry = appendNewCanvas(nextName);
+    activeCanvasIdRef.current = registry.activeCanvasId;
+    setActiveCanvasIdState(registry.activeCanvasId);
+    setCanvasListState(registry.canvases);
+    setStore({
+      graph: { nodes: [], edges: [] },
+      timeline: emptyTimeline(),
+    });
+    setInitialPrompt('');
+  }, []);
+
+  useEffect(() => {
+    const isTextEditingTarget = (t: EventTarget | null) => {
+      if (!t || !(t instanceof HTMLElement)) return false;
+      if (t.isContentEditable) return true;
+      const tag = t.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!e.metaKey && !e.ctrlKey) return;
+      if (isTextEditingTarget(e.target)) return;
+
+      const key = e.key.toLowerCase();
+
+      if (key === 'z' && !e.shiftKey) {
+        if (!canUndoTimeline(storeRef.current.timeline)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        undo();
+        return;
+      }
+
+      const redoChord =
+        (key === 'z' && e.shiftKey) || (e.ctrlKey && !e.metaKey && key === 'y');
+      if (redoChord) {
+        if (!canRedoTimeline(storeRef.current.timeline)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        redo();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [undo, redo]);
+
+  const fetchSparkQuestion = useCallback((signal?: AbortSignal) => {
+    fetch('/api/spark', { signal, headers: withByokHeaders() })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d: { question?: string }) => setSparkQuestion(d.question ?? ''))
+      .catch((err: { name?: string }) => {
+        if (err?.name !== 'AbortError') setSparkQuestion('How do black holes form?');
+      });
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch('/api/spark', { signal: controller.signal })
-      .then((r) => r.json())
-      .then((d) => setSparkQuestion(d.question ?? ''))
-      .catch((err) => {
-        if (err.name !== 'AbortError') setSparkQuestion('How do black holes form?');
-      });
+    fetchSparkQuestion(controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [fetchSparkQuestion]);
+
+  const refreshSparkPrompt = useCallback(() => {
+    fetchSparkQuestion();
+  }, [fetchSparkQuestion]);
 
   const handleRecolor = useCallback(
     (nodeId: string, targetNodeId: string, newHex: string) => {
-      setNodes((prev) =>
-        prev.map((n) => {
-          if (n.id === nodeId) {
-            const nodeData = n.data as QANodeData;
-            return {
-              ...n,
-              data: {
-                ...n.data,
-                persistedMarks: nodeData.persistedMarks.map((m) =>
-                  m.targetNodeId === targetNodeId ? { ...m, color: newHex } : m
-                ),
-              },
-            };
-          }
-          if (n.id === targetNodeId) {
-            return { ...n, data: { ...n.data, branchColor: newHex } };
-          }
-          return n;
-        })
-      );
-      setEdges((prev) =>
-        prev.map((e) => {
-          if (e.source === nodeId && e.target === targetNodeId) {
-            return { ...e, style: { ...e.style, stroke: newHex }, markerEnd: { ...ARROW_MARKER, color: newHex } };
-          }
-          return e;
-        })
-      );
+      commit({ kind: 'recolor-mark', sourceNodeId: nodeId, targetNodeId, hex: newHex });
     },
-    [setNodes, setEdges]
+    [commit]
   );
 
   const handleNodeRecolor = useCallback(
     (nodeId: string, newHex: string) => {
-      setNodes((prev) =>
-        prev.map((n) => {
-          if (n.id !== nodeId) return n;
-          return { ...n, data: { ...n.data, branchColor: newHex } };
-        })
-      );
-      setEdges((prev) =>
-        prev.map((e) => {
-          if (e.target === nodeId) {
-            return { ...e, style: { ...e.style, stroke: newHex }, markerEnd: { ...ARROW_MARKER, color: newHex } };
-          }
-          return e;
-        })
-      );
-      setNodes((prev) =>
-        prev.map((n) => {
-          if (n.type !== 'qa') return n;
-          const nd = n.data as QANodeData;
-          const hasMatch = nd.persistedMarks?.some((m) => m.targetNodeId === nodeId);
-          if (!hasMatch) return n;
-          return {
-            ...n,
-            data: {
-              ...n.data,
-              persistedMarks: nd.persistedMarks.map((m) =>
-                m.targetNodeId === nodeId ? { ...m, color: newHex } : m
-              ),
-            },
-          };
-        })
-      );
+      commit({ kind: 'recolor-node', nodeId, hex: newHex });
     },
-    [setNodes, setEdges]
+    [commit]
   );
 
   const handleDelete = useCallback(
     (nodeId: string) => {
-      setNodes((prev) => {
-        return prev
-          .filter((n) => n.id !== nodeId)
-          .map((n) => {
-            if (n.type !== 'qa') return n;
-            const nodeData = n.data as QANodeData;
-            if (nodeData.persistedMarks?.some((m) => m.targetNodeId === nodeId)) {
-              return {
-                ...n,
-                data: {
-                  ...n.data,
-                  persistedMarks: nodeData.persistedMarks.filter((m) => m.targetNodeId !== nodeId),
-                },
-              };
-            }
-            return n;
-          });
-      });
-      setEdges((prev) => prev.filter((e) => e.source !== nodeId && e.target !== nodeId));
+      commit({ kind: 'delete-node', nodeId });
     },
-    [setNodes, setEdges]
+    [commit]
   );
 
   const handleExpand = useCallback(
     (nodeId: string) => {
-      setNodes((prev) => {
-        const node = prev.find((n) => n.id === nodeId);
-        if (!node) return prev;
+      const snap = storeRef.current.graph;
+      const node = snap.nodes.find((n) => n.id === nodeId);
+      if (!node) return;
 
-        const nodeData = node.data as QANodeData;
-        const parentNode = nodeData.parentId
-          ? prev.find((n) => n.id === nodeData.parentId)
-          : undefined;
-        const parentData = parentNode?.data as QANodeData | undefined;
+      const nodeData = node.data as QANodeData;
+      const parentNode = nodeData.parentId
+        ? snap.nodes.find((n) => n.id === nodeData.parentId)
+        : undefined;
+      const parentData = parentNode?.data as QANodeData | undefined;
 
-        const updated = prev.map((n) =>
-          n.id === nodeId ? { ...n, data: { ...n.data, isExpanding: true } } : n
-        );
+      commit({ kind: 'patch-qa-data', nodeId, patch: { isExpanding: true } });
 
-        (async () => {
-          try {
-            const { response, keywords, followUpQuestions } = await explore({
-              prompt: nodeData.userPrompt,
-              markedText: nodeData.branchedFromText ?? undefined,
-              parentContext: parentData?.aiResponse
-                ? { question: parentData.userPrompt, answer: parentData.aiResponse }
-                : undefined,
-              expand: true,
-              currentAnswer: nodeData.aiResponse,
-            });
-            setNodes((p) =>
-              p.map((n) => {
-                if (n.id !== nodeId) return n;
-                return {
-                  ...n,
-                  data: {
-                    ...n.data,
-                    aiResponse: response,
-                    followUpQuestions,
-                    keywords,
-                    persistedMarks: [],
-                    isExpanding: false,
-                  },
-                };
-              })
-            );
-          } catch (err) {
-            console.error('Expand failed:', err);
-            setNodes((p) =>
-              p.map((n) =>
-                n.id === nodeId ? { ...n, data: { ...n.data, isExpanding: false } } : n
-              )
-            );
-          }
-        })();
-
-        return updated;
-      });
+      (async () => {
+        try {
+          const { response, keywords, followUpQuestions } = await explore({
+            prompt: nodeData.userPrompt,
+            markedText: nodeData.branchedFromText ?? undefined,
+            parentContext: parentData?.aiResponse
+              ? { question: parentData.userPrompt, answer: parentData.aiResponse }
+              : undefined,
+            expand: true,
+            currentAnswer: nodeData.aiResponse,
+          });
+          commit({
+            kind: 'supersede-qa-model-output',
+            nodeId,
+            source: 'expand',
+            output: {
+              aiResponse: response,
+              followUpQuestions,
+              keywords,
+              persistedMarks: [],
+            },
+          });
+        } catch (err) {
+          console.error('Expand failed:', err);
+          commit({ kind: 'patch-qa-data', nodeId, patch: { isExpanding: false } });
+        }
+      })();
     },
-    [setNodes]
+    [commit]
   );
 
   const handleRetry = useCallback(
     (nodeId: string) => {
-      setNodes((prev) => {
-        const node = prev.find((n) => n.id === nodeId);
-        if (!node) return prev;
+      const snap = storeRef.current.graph;
+      const node = snap.nodes.find((n) => n.id === nodeId);
+      if (!node) return;
 
-        const nodeData = node.data as QANodeData;
-        const parentNode = nodeData.parentId
-          ? prev.find((n) => n.id === nodeData.parentId)
-          : undefined;
-        const parentData = parentNode?.data as QANodeData | undefined;
+      const nodeData = node.data as QANodeData;
+      const parentNode = nodeData.parentId
+        ? snap.nodes.find((n) => n.id === nodeData.parentId)
+        : undefined;
+      const parentData = parentNode?.data as QANodeData | undefined;
 
-        const updated = prev.map((n) =>
-          n.id === nodeId
-            ? { ...n, data: { ...n.data, isLoading: true, hasFailed: false, aiResponse: '' } }
-            : n
-        );
-
-        (async () => {
-          try {
-            const { response, keywords, title, followUpQuestions } = await explore({
-              prompt: nodeData.userPrompt,
-              markedText: nodeData.branchedFromText ?? undefined,
-              parentContext: parentData?.aiResponse
-                ? { question: parentData.userPrompt, answer: parentData.aiResponse }
-                : undefined,
-            });
-            setNodes((p) =>
-              p.map((n) => {
-                if (n.id !== nodeId) return n;
-                const existing = n.data as QANodeData;
-                return {
-                  ...n,
-                  data: {
-                    ...n.data,
-                    aiResponse: response,
-                    followUpQuestions,
-                    keywords,
-                    title: existing.title || title,
-                    isLoading: false,
-                  },
-                };
-              })
-            );
-          } catch (err) {
-            console.error('Retry failed:', err);
-            setNodes((p) =>
-              p.map((n) => {
-                if (n.id !== nodeId) return n;
-                return {
-                  ...n,
-                  data: {
-                    ...n.data,
-                    aiResponse: 'Something went wrong.',
-                    followUpQuestions: [],
-                    keywords: [],
-                    isLoading: false,
-                    hasFailed: true,
-                  },
-                };
-              })
-            );
-          }
-        })();
-
-        return updated;
-      });
-    },
-    [setNodes]
-  );
-
-  const handleRegenerateImage = useCallback(
-    (imgNodeId: string, newPrompt: string) => {
-      let capturedContext = '';
-
-      setNodes((prev) => {
-        const node = prev.find((n) => n.id === imgNodeId);
-        if (!node) return prev;
-        capturedContext = (node.data as ImageNodeData).context ?? '';
-
-        return prev.map((n) => {
-          if (n.id !== imgNodeId) return n;
-          return { ...n, data: { ...n.data, prompt: newPrompt, isLoading: true } };
-        });
+      commit({
+        kind: 'patch-qa-data',
+        nodeId,
+        patch: { isLoading: true, hasFailed: false },
       });
 
       (async () => {
         try {
-          const { imageUrl, title } = await imagine({ prompt: newPrompt, context: capturedContext || undefined });
-          setNodes((prev) =>
-            prev.map((n) => {
-              if (n.id !== imgNodeId) return n;
-              const nd = n.data as ImageNodeData;
-              return {
-                ...n,
-                data: {
-                  ...n.data,
-                  imageUrl,
-                  title,
-                  images: [{ prompt: newPrompt, title, url: imageUrl }, ...nd.images],
-                  isLoading: false,
-                },
-              };
-            })
-          );
+          const { response, keywords, title, followUpQuestions } = await explore({
+            prompt: nodeData.userPrompt,
+            markedText: nodeData.branchedFromText ?? undefined,
+            parentContext: parentData?.aiResponse
+              ? { question: parentData.userPrompt, answer: parentData.aiResponse }
+              : undefined,
+          });
+          commit({
+            kind: 'supersede-qa-model-output',
+            nodeId,
+            source: 'retry',
+            output: {
+              aiResponse: response,
+              followUpQuestions,
+              keywords,
+              title: nodeData.title || title,
+            },
+          });
         } catch (err) {
-          console.error('Image regeneration failed:', err);
-          setNodes((prev) =>
-            prev.map((n) =>
-              n.id === imgNodeId ? { ...n, data: { ...n.data, isLoading: false } } : n
-            )
-          );
+          console.error('Retry failed:', err);
+          commit({
+            kind: 'patch-qa-data',
+            nodeId,
+            patch: {
+              isLoading: false,
+              hasFailed: true,
+            },
+          });
         }
       })();
     },
-    [setNodes]
+    [commit]
+  );
+
+  const handleRegenerateImage = useCallback(
+    (imgNodeId: string, newPrompt: string) => {
+      const snap = storeRef.current.graph;
+      const node = snap.nodes.find((n) => n.id === imgNodeId);
+      if (!node) return;
+      const capturedContext = (node.data as ImageNodeData).context ?? '';
+
+      commit({
+        kind: 'patch-image-data',
+        nodeId: imgNodeId,
+        patch: { prompt: newPrompt, isLoading: true },
+      });
+
+      (async () => {
+        try {
+          const { imageUrl, title } = await imagine({
+            prompt: newPrompt,
+            context: capturedContext || undefined,
+          });
+          const latest = storeRef.current.graph.nodes.find((n) => n.id === imgNodeId);
+          const nd = latest?.data as ImageNodeData | undefined;
+          commit({
+            kind: 'patch-image-data',
+            nodeId: imgNodeId,
+            patch: {
+              imageUrl,
+              title,
+              images: [{ prompt: newPrompt, title, url: imageUrl }, ...(nd?.images ?? [])],
+              isLoading: false,
+            },
+          });
+        } catch (err) {
+          console.error('Image regeneration failed:', err);
+          commit({ kind: 'patch-image-data', nodeId: imgNodeId, patch: { isLoading: false } });
+        }
+      })();
+    },
+    [commit]
   );
 
   const handleSelectImage = useCallback(
     (imgNodeId: string, url: string) => {
-      setNodes((prev) =>
-        prev.map((n) => {
-          if (n.id !== imgNodeId) return n;
-          const nd = n.data as ImageNodeData;
-          const entry = nd.images.find((img) => img.url === url);
-          return {
-            ...n,
-            data: {
-              ...n.data,
-              imageUrl: url,
-              title: entry?.title ?? nd.title,
-              prompt: entry?.prompt ?? nd.prompt,
-            },
-          };
-        })
-      );
+      const snap = storeRef.current.graph;
+      const n = snap.nodes.find((x) => x.id === imgNodeId);
+      if (!n) return;
+      const nd = n.data as ImageNodeData;
+      const entry = nd.images.find((img) => img.url === url);
+      commit({
+        kind: 'patch-image-data',
+        nodeId: imgNodeId,
+        patch: {
+          imageUrl: url,
+          title: entry?.title ?? nd.title,
+          prompt: entry?.prompt ?? nd.prompt,
+        },
+      });
     },
-    [setNodes]
+    [commit]
   );
 
   const handleImagine = useCallback(
     (nodeId: string, prompt: string, context: string) => {
-      setNodes((currentNodes) => {
-        const sourceNode = currentNodes.find((n) => n.id === nodeId);
-        if (!sourceNode) return currentNodes;
+      setStore(({ graph, timeline }) => {
+        const sourceNode = graph.nodes.find((n) => n.id === nodeId);
+        if (!sourceNode) return { graph, timeline };
 
-        const siblingCount = currentNodes.filter((n) => {
+        const siblingCount = graph.nodes.filter((n) => {
           const d = n.data as QANodeData | ImageNodeData;
           return d.parentId === nodeId;
         }).length;
@@ -399,143 +483,123 @@ export function useCanvasGraph() {
           createdAt: new Date(),
         };
 
-        const newNode: Node = {
-          id: imgNodeId,
-          type: 'image',
-          position,
-          style: { width: 280 },
-          data: { ...imgData, isLoading: true },
-        };
+        const newNode = createImageReactFlowNode(imgData, { position }, { isLoading: true });
 
-        const newEdge: Edge = {
-          id: `edge-${nodeId}-${imgNodeId}`,
-          source: nodeId,
-          target: imgNodeId,
-          type: 'floating',
-          style: { stroke: '#818cf8', strokeWidth: 2, strokeDasharray: '6 3' },
-          markerEnd: { ...ARROW_MARKER, color: '#818cf8' },
-        };
+        const newEdge = createEdge(
+          nodeId,
+          imgNodeId,
+          { stroke: '#818cf8', strokeWidth: 2, strokeDasharray: '6 3' },
+          '#818cf8'
+        );
 
-        setEdges((prev) => [...prev, newEdge]);
+        const batch: CanvasGraphCommand = {
+          kind: 'batch',
+          commands: [
+            { kind: 'append-nodes', nodes: [newNode] },
+            { kind: 'add-edge', edge: newEdge },
+          ],
+        };
+        const nextGraph = applyCanvasGraphCommand(graph, batch);
+        const nextTimeline = appendRevision(timeline, batch);
 
         (async () => {
           try {
             const { imageUrl, title } = await imagine({ prompt, context: context || undefined });
-            setNodes((prev) =>
-              prev.map((n) => {
-                if (n.id !== imgNodeId) return n;
-                return {
-                  ...n,
-                  data: {
-                    ...n.data,
-                    imageUrl,
-                    title,
-                    images: [{ prompt, title, url: imageUrl }],
-                    isLoading: false,
-                  },
-                };
-              })
-            );
+            commit({
+              kind: 'patch-image-data',
+              nodeId: imgNodeId,
+              patch: {
+                imageUrl,
+                title,
+                images: [{ prompt, title, url: imageUrl }],
+                isLoading: false,
+              },
+            });
           } catch (err) {
             console.error('Image generation failed:', err);
-            setNodes((prev) => prev.filter((n) => n.id !== imgNodeId));
-            setEdges((prev) => prev.filter((e) => e.target !== imgNodeId));
+            commit({ kind: 'delete-node', nodeId: imgNodeId });
           }
         })();
 
-        return [...currentNodes, newNode];
+        return { graph: nextGraph, timeline: nextTimeline };
       });
     },
-    [setNodes, setEdges]
+    [commit]
   );
 
-  const handleNote = useCallback(
-    (sourceNodeId: string, marks: MarkPayload[], hex: string, fromText?: string) => {
-      setNodes((currentNodes) => {
-        const sourceNode = currentNodes.find((n) => n.id === sourceNodeId);
-        if (!sourceNode) return currentNodes;
+  const handleNote = useCallback((sourceNodeId: string, marks: MarkPayload[], hex: string, fromText?: string) => {
+    setStore(({ graph, timeline }) => {
+      const sourceNode = graph.nodes.find((n) => n.id === sourceNodeId);
+      if (!sourceNode) return { graph, timeline };
 
-        const siblingCount = currentNodes.filter((n) => {
-          const d = n.data as QANodeData | ImageNodeData | NoteNodeData;
-          return 'parentId' in d && d.parentId === sourceNodeId;
-        }).length;
+      const siblingCount = graph.nodes.filter((n) => {
+        const d = n.data as QANodeData | ImageNodeData | NoteNodeData;
+        return 'parentId' in d && d.parentId === sourceNodeId;
+      }).length;
 
-        const position = findChildPosition(sourceNode, siblingCount);
-        const nodeId = generateId();
+      const position = findChildPosition(sourceNode, siblingCount);
+      const nodeId = generateId();
 
-        const noteData: NoteNodeData = {
-          id: nodeId,
-          parentId: sourceNodeId,
-          content: '',
-          branchColor: hex,
-          createdAt: new Date(),
-        };
+      const noteData: NoteNodeData = {
+        id: nodeId,
+        parentId: sourceNodeId,
+        content: '',
+        branchColor: hex,
+        createdAt: new Date(),
+      };
 
-        const newNode: Node = {
-          id: nodeId,
-          type: 'note',
-          position,
-          style: { width: 280 },
-          data: noteData,
-        };
+      const newNode = createNoteReactFlowNode(noteData, { position });
 
-        const newEdge: Edge = {
-          id: `edge-${sourceNodeId}-${nodeId}`,
-          source: sourceNodeId,
-          target: nodeId,
-          type: 'floating',
-          style: { stroke: hex, strokeWidth: 2, strokeDasharray: '4 4' },
-          markerEnd: { ...ARROW_MARKER, color: hex },
-          data: { label: fromText || 'Note' },
-        };
+      const newEdge = createEdge(
+        sourceNodeId,
+        nodeId,
+        { stroke: hex, strokeWidth: 2, strokeDasharray: '4 4' },
+        hex,
+        fromText || 'Note'
+      );
 
-        setEdges((prev) => [...prev, newEdge]);
-
-        const hasMarks = marks.length > 0;
-        const updatedNodes = hasMarks
-          ? currentNodes.map((n) => {
-              if (n.id !== sourceNodeId) return n;
-              const existingMarks = (n.data as QANodeData).persistedMarks ?? [];
-              const newPersistedMarks: PersistedMark[] = marks.map((m) => ({
-                text: m.text,
-                startIndex: m.startIndex,
-                endIndex: m.endIndex,
-                color: hex,
-                targetNodeId: nodeId,
-              }));
-              return {
-                ...n,
-                data: { ...n.data, persistedMarks: [...existingMarks, ...newPersistedMarks] },
-              };
-            })
-          : currentNodes;
-
-        return [...updatedNodes, newNode];
-      });
-    },
-    [setNodes, setEdges]
-  );
+      const batch: CanvasGraphCommand = {
+        kind: 'batch',
+        commands: [
+          {
+            kind: 'append-persisted-marks',
+            sourceNodeId,
+            marks,
+            color: hex,
+            targetNodeId: nodeId,
+          },
+          { kind: 'append-nodes', nodes: [newNode] },
+          { kind: 'add-edge', edge: newEdge },
+        ],
+      };
+      return {
+        graph: applyCanvasGraphCommand(graph, batch),
+        timeline: appendRevision(timeline, batch),
+      };
+    });
+  }, []);
 
   const handleUpdateNote = useCallback(
     (nodeId: string, content: string) => {
-      setNodes((prev) =>
-        prev.map((n) => {
-          if (n.id !== nodeId) return n;
-          return { ...n, data: { ...n.data, content } };
-        })
-      );
+      commit({ kind: 'patch-note-data', nodeId, patch: { content } });
     },
-    [setNodes]
+    [commit]
   );
 
   const handleAsk = useCallback(
-    (sourceNodeId: string, prompt: string, marks: MarkPayload[], hex: string, fromText?: string) => {
-      setNodes((currentNodes) => {
-        const sourceNode = currentNodes.find((n) => n.id === sourceNodeId);
-        if (!sourceNode) return currentNodes;
+    (
+      sourceNodeId: string,
+      prompt: string,
+      marks: MarkPayload[],
+      hex: string,
+      fromText?: string
+    ) => {
+      setStore(({ graph, timeline }) => {
+        const sourceNode = graph.nodes.find((n) => n.id === sourceNodeId);
+        if (!sourceNode) return { graph, timeline };
 
         const sourceData = sourceNode.data as QANodeData;
-        const siblingCount = currentNodes.filter(
+        const siblingCount = graph.nodes.filter(
           (n) => (n.data as QANodeData).parentId === sourceNodeId
         ).length;
 
@@ -543,59 +607,41 @@ export function useCanvasGraph() {
         const nodeId = generateId();
         const markedText = fromText || undefined;
 
-        const nodeData: QANodeData = {
+        const nodeData = createQANodeData({
           id: nodeId,
-          title: '',
-          userPrompt: prompt,
-          aiResponse: '',
-          followUpQuestions: [],
-          keywords: [],
-          persistedMarks: [],
+          prompt,
           parentId: sourceNodeId,
+          branchColor: hex,
           branchedFromId: fromText ? sourceNodeId : null,
           branchedFromText: fromText ?? null,
-          branchColor: hex,
-          createdAt: new Date(),
+        });
+
+        const newNode = createQAReactFlowNode(nodeData, { position }, { isLoading: true });
+
+        const newEdge = createEdge(
+          sourceNodeId,
+          nodeId,
+          { stroke: hex, strokeWidth: 2 },
+          hex,
+          fromText || prompt
+        );
+
+        const batch: CanvasGraphCommand = {
+          kind: 'batch',
+          commands: [
+            {
+              kind: 'append-persisted-marks',
+              sourceNodeId,
+              marks,
+              color: hex,
+              targetNodeId: nodeId,
+            },
+            { kind: 'append-nodes', nodes: [newNode] },
+            { kind: 'add-edge', edge: newEdge },
+          ],
         };
-
-        const newNode: Node = {
-          id: nodeId,
-          type: 'qa',
-          position,
-          style: { width: 380 },
-          data: { ...nodeData, isLoading: true },
-        };
-
-        const newEdge: Edge = {
-          id: `edge-${sourceNodeId}-${nodeId}`,
-          source: sourceNodeId,
-          target: nodeId,
-          type: 'floating',
-          style: { stroke: hex, strokeWidth: 2 },
-          markerEnd: { ...ARROW_MARKER, color: hex },
-          data: { label: fromText || prompt },
-        };
-
-        setEdges((prev) => [...prev, newEdge]);
-
-        const hasMarks = marks.length > 0;
-        const updatedNodes = hasMarks
-          ? currentNodes.map((n) => {
-              if (n.id !== sourceNodeId) return n;
-              const existingMarks = (n.data as QANodeData).persistedMarks ?? [];
-              const newPersistedMarks: PersistedMark[] = marks.map((m) => ({
-                text: m.text,
-                startIndex: m.startIndex,
-                endIndex: m.endIndex,
-                color: hex,
-                targetNodeId: nodeId,
-              }));
-              return {
-                ...n,
-                data: { ...n.data, persistedMarks: [...existingMarks, ...newPersistedMarks] },
-              };
-            })
-          : currentNodes;
+        const nextGraph = applyCanvasGraphCommand(graph, batch);
+        const nextTimeline = appendRevision(timeline, batch);
 
         (async () => {
           try {
@@ -606,172 +652,132 @@ export function useCanvasGraph() {
                 ? { question: sourceData.userPrompt, answer: sourceData.aiResponse }
                 : undefined,
             });
-            setNodes((prev) =>
-              prev.map((n) => {
-                if (n.id !== nodeId) return n;
-                return {
-                  ...n,
-                  data: {
-                    ...n.data,
-                    aiResponse: response,
-                    followUpQuestions,
-                    keywords,
-                    title: title || prompt,
-                    isLoading: false,
-                  },
-                };
-              })
-            );
+            commit({
+              kind: 'patch-qa-data',
+              nodeId,
+              patch: {
+                aiResponse: response,
+                followUpQuestions,
+                keywords,
+                title: title || prompt,
+                isLoading: false,
+              },
+            });
           } catch (err) {
             console.error('AI request failed:', err);
-            setNodes((prev) =>
-              prev.map((n) => {
-                if (n.id !== nodeId) return n;
-                return {
-                  ...n,
-                  data: {
-                    ...n.data,
-                    aiResponse: 'Something went wrong.',
-                    followUpQuestions: [],
-                    keywords: [],
-                    isLoading: false,
-                    hasFailed: true,
-                  },
-                };
-              })
-            );
+            commit({
+              kind: 'patch-qa-data',
+              nodeId,
+              patch: {
+                aiResponse: 'Something went wrong.',
+                followUpQuestions: [],
+                keywords: [],
+                isLoading: false,
+                hasFailed: true,
+              },
+            });
           }
         })();
 
-        return [...updatedNodes, newNode];
+        return { graph: nextGraph, timeline: nextTimeline };
       });
     },
-    [setNodes, setEdges]
+    [commit]
   );
 
-  const handleCreateDraftFollowUp = useCallback(
-    (sourceNodeId: string, prompt: string, hex: string) => {
-      setNodes((currentNodes) => {
-        const sourceNode = currentNodes.find((n) => n.id === sourceNodeId);
-        if (!sourceNode) return currentNodes;
+  const handleCreateDraftFollowUp = useCallback((sourceNodeId: string, prompt: string, hex: string) => {
+    setStore(({ graph, timeline }) => {
+      const sourceNode = graph.nodes.find((n) => n.id === sourceNodeId);
+      if (!sourceNode) return { graph, timeline };
 
-        const siblingCount = currentNodes.filter(
-          (n) => (n.data as QANodeData).parentId === sourceNodeId
-        ).length;
-        const position = findChildPosition(sourceNode, siblingCount);
-        const nodeId = generateId();
+      const siblingCount = graph.nodes.filter(
+        (n) => (n.data as QANodeData).parentId === sourceNodeId
+      ).length;
+      const position = findChildPosition(sourceNode, siblingCount);
+      const nodeId = generateId();
 
-        const nodeData: QANodeData = {
-          id: nodeId,
-          title: 'New Follow-Up Question',
-          userPrompt: prompt,
-          aiResponse: '',
-          followUpQuestions: [],
-          keywords: [],
-          persistedMarks: [],
-          parentId: sourceNodeId,
-          branchedFromId: null,
-          branchedFromText: null,
-          branchColor: hex,
-          createdAt: new Date(),
-        };
-
-        const newNode: Node = {
-          id: nodeId,
-          type: 'qa',
-          position,
-          style: { width: 380 },
-          data: { ...nodeData, isAwaitingPrompt: true },
-        };
-
-        const newEdge: Edge = {
-          id: `edge-${sourceNodeId}-${nodeId}`,
-          source: sourceNodeId,
-          target: nodeId,
-          type: 'floating',
-          style: { stroke: hex, strokeWidth: 2 },
-          markerEnd: { ...ARROW_MARKER, color: hex },
-          data: { label: prompt },
-        };
-
-        setEdges((prev) => [...prev, newEdge]);
-        return [...currentNodes, newNode];
+      const nodeData = createQANodeData({
+        id: nodeId,
+        prompt,
+        parentId: sourceNodeId,
+        branchColor: hex,
+        title: 'New Follow-Up Question',
       });
-    },
-    [setNodes, setEdges]
-  );
+
+      const newNode = createQAReactFlowNode(nodeData, { position }, { isAwaitingPrompt: true });
+
+      const newEdge = createEdge(
+        sourceNodeId,
+        nodeId,
+        { stroke: hex, strokeWidth: 2 },
+        hex,
+        prompt
+      );
+
+      const batch: CanvasGraphCommand = {
+        kind: 'batch',
+        commands: [
+          { kind: 'append-nodes', nodes: [newNode] },
+          { kind: 'add-edge', edge: newEdge },
+        ],
+      };
+      return {
+        graph: applyCanvasGraphCommand(graph, batch),
+        timeline: appendRevision(timeline, batch),
+      };
+    });
+  }, []);
 
   const createRootNode = useCallback(
     (prompt: string) => {
       const nodeId = generateId();
 
-      const nodeData: QANodeData = {
+      const nodeData = createQANodeData({
         id: nodeId,
-        title: '',
-        userPrompt: prompt,
-        aiResponse: '',
-        followUpQuestions: [],
-        keywords: [],
-        persistedMarks: [],
+        prompt,
         parentId: null,
-        branchedFromId: null,
-        branchedFromText: null,
         branchColor: null,
-        createdAt: new Date(),
-      };
+      });
 
-      const newNode: Node = {
-        id: nodeId,
-        type: 'qa',
-        position: { x: 0, y: 0 },
-        style: { width: 380 },
-        data: { ...nodeData, isLoading: true },
-      };
+      const newNode = createQAReactFlowNode(
+        nodeData,
+        { position: { x: 0, y: 0 } },
+        { isLoading: true }
+      );
 
-      setNodes([newNode]);
-      setEdges([]);
+      commit({ kind: 'set-graph', nodes: [newNode], edges: [] });
 
       (async () => {
         try {
           const { response, keywords, title, followUpQuestions } = await explore({ prompt });
-          setNodes((prev) =>
-            prev.map((n) => {
-              if (n.id !== nodeId) return n;
-              return {
-                ...n,
-                data: {
-                  ...n.data,
-                  aiResponse: response,
-                  followUpQuestions,
-                  keywords,
-                  title: title || prompt,
-                  isLoading: false,
-                },
-              };
-            })
-          );
+          commit({
+            kind: 'patch-qa-data',
+            nodeId,
+            patch: {
+              aiResponse: response,
+              followUpQuestions,
+              keywords,
+              title: title || prompt,
+              isLoading: false,
+            },
+          });
         } catch (err) {
           console.error('AI request failed:', err);
-          setNodes((prev) =>
-            prev.map((n) => {
-              if (n.id !== nodeId) return n;
-              return {
-                ...n,
-                data: {
-                  ...n.data,
-                  aiResponse: 'Something went wrong.',
-                  followUpQuestions: [],
-                  keywords: [],
-                  isLoading: false,
-                  hasFailed: true,
-                },
-              };
-            })
-          );
+          commit({
+            kind: 'patch-qa-data',
+            nodeId,
+            patch: {
+              aiResponse: 'Something went wrong.',
+              followUpQuestions: [],
+              keywords: [],
+              isLoading: false,
+              hasFailed: true,
+            },
+          });
         }
       })();
     },
-    [setNodes, setEdges]
+    [commit]
   );
 
   const handleInitialSubmit = useCallback(
@@ -786,74 +792,59 @@ export function useCanvasGraph() {
   );
 
   const handleClearCanvas = useCallback(() => {
-    if (window.confirm('Clear the entire canvas? This cannot be undone.')) {
-      setNodes([]);
-      setEdges([]);
-      clearCanvas();
+    if (
+      window.confirm(
+        'Clear the entire canvas? You can use Undo to bring it back until you make other changes.'
+      )
+    ) {
+      commit({ kind: 'set-graph', nodes: [], edges: [] });
     }
-  }, [setNodes, setEdges]);
+  }, [commit]);
 
   const handleUpdateTitle = useCallback(
     (nodeId: string, newTitle: string) => {
-      setNodes((prev) =>
-        prev.map((n) => {
-          if (n.id !== nodeId) return n;
-          return { ...n, data: { ...n.data, title: newTitle } };
-        })
-      );
+      commit({ kind: 'patch-qa-data', nodeId, patch: { title: newTitle } });
     },
-    [setNodes]
+    [commit]
   );
 
   const createNodeAt = useCallback(
     (position: { x: number; y: number }) => {
       const nodeId = generateId();
-      const nodeData: QANodeData = {
+      const nodeData = createQANodeData({
         id: nodeId,
-        title: '',
-        userPrompt: '',
-        aiResponse: '',
-        followUpQuestions: [],
-        keywords: [],
-        persistedMarks: [],
+        prompt: '',
         parentId: null,
-        branchedFromId: null,
-        branchedFromText: null,
         branchColor: null,
-        createdAt: new Date(),
-      };
-      const newNode: Node = {
-        id: nodeId,
-        type: 'qa',
-        position,
-        style: { width: 380 },
-        data: { ...nodeData, isAwaitingPrompt: true },
-      };
-      setNodes((prev) => [...prev, newNode]);
+      });
+      const newNode = createQAReactFlowNode(nodeData, { position }, { isAwaitingPrompt: true });
+      commit({ kind: 'append-nodes', nodes: [newNode] });
     },
-    [setNodes]
+    [commit]
   );
 
   const handleSubmitRootPrompt = useCallback(
     (nodeId: string, prompt: string) => {
-      const targetNode = nodes.find((n) => n.id === nodeId);
+      const snap = storeRef.current.graph;
+      const targetNode = snap.nodes.find((n) => n.id === nodeId);
       if (!targetNode) return;
       const targetData = targetNode.data as QANodeData;
       const parentNode = targetData.parentId
-        ? nodes.find((n) => n.id === targetData.parentId)
+        ? snap.nodes.find((n) => n.id === targetData.parentId)
         : undefined;
       const parentData = parentNode?.data as QANodeData | undefined;
 
-      setNodes((prev) =>
-        prev.map((n) =>
-          n.id === nodeId
-            ? { ...n, data: { ...n.data, userPrompt: prompt, isLoading: true, isAwaitingPrompt: false } }
-            : n
-        )
-      );
-      setEdges((prev) =>
-        prev.map((e) => (e.target === nodeId ? { ...e, data: { ...e.data, label: prompt } } : e))
-      );
+      commit({
+        kind: 'batch',
+        commands: [
+          {
+            kind: 'patch-qa-data',
+            nodeId,
+            patch: { userPrompt: prompt, isLoading: true, isAwaitingPrompt: false },
+          },
+          { kind: 'set-edge-label-by-target', targetNodeId: nodeId, label: prompt },
+        ],
+      });
 
       (async () => {
         try {
@@ -863,42 +854,33 @@ export function useCanvasGraph() {
               ? { question: parentData.userPrompt, answer: parentData.aiResponse }
               : undefined,
           });
-          setNodes((prev) =>
-            prev.map((n) => {
-              if (n.id !== nodeId) return n;
-              return {
-                ...n,
-                data: {
-                  ...n.data,
-                  aiResponse: response,
-                  followUpQuestions,
-                  keywords,
-                  title: title || prompt,
-                  isLoading: false,
-                },
-              };
-            })
-          );
+          commit({
+            kind: 'patch-qa-data',
+            nodeId,
+            patch: {
+              aiResponse: response,
+              followUpQuestions,
+              keywords,
+              title: title || prompt,
+              isLoading: false,
+            },
+          });
         } catch (err) {
           console.error('Root prompt failed:', err);
-          setNodes((prev) =>
-            prev.map((n) => {
-              if (n.id !== nodeId) return n;
-              return {
-                ...n,
-                data: { ...n.data, isLoading: false, hasFailed: true },
-              };
-            })
-          );
+          commit({
+            kind: 'patch-qa-data',
+            nodeId,
+            patch: { isLoading: false, hasFailed: true },
+          });
         }
       })();
     },
-    [nodes, setNodes, setEdges]
+    [commit]
   );
 
   const handleRefreshFollowUps = useCallback(
     async (nodeId: string) => {
-      const target = nodes.find((n) => n.id === nodeId);
+      const target = storeRef.current.graph.nodes.find((n) => n.id === nodeId);
       if (!target) return;
       const nodeData = target.data as QANodeData;
       if (!nodeData.userPrompt || !nodeData.aiResponse) return;
@@ -908,66 +890,105 @@ export function useCanvasGraph() {
           question: nodeData.userPrompt,
           answer: nodeData.aiResponse,
         });
-        setNodes((prev) =>
-          prev.map((n) =>
-            n.id === nodeId ? { ...n, data: { ...n.data, followUpQuestions } } : n
-          )
-        );
+        commit({ kind: 'patch-qa-data', nodeId, patch: { followUpQuestions } });
       } catch (err) {
         console.error('Follow-up refresh failed:', err);
       }
     },
-    [nodes, setNodes]
+    [commit]
   );
 
-  const qaCallbacks = useMemo(() => ({
-    onAsk: handleAsk,
-    onRecolor: handleRecolor,
-    onNodeRecolor: handleNodeRecolor,
-    onExpand: handleExpand,
-    onImagine: handleImagine,
-    onDelete: handleDelete,
-    onRetry: handleRetry,
-    onNote: handleNote,
-    onUpdateTitle: handleUpdateTitle,
-    onSubmitRootPrompt: handleSubmitRootPrompt,
-    onRefreshFollowUps: handleRefreshFollowUps,
-    onCreateDraftFollowUp: handleCreateDraftFollowUp,
-  }), [handleAsk, handleRecolor, handleNodeRecolor, handleExpand, handleImagine, handleDelete, handleRetry, handleNote, handleUpdateTitle, handleSubmitRootPrompt, handleRefreshFollowUps, handleCreateDraftFollowUp]);
+  const qaCallbacks = useMemo(
+    () => ({
+      onAsk: handleAsk,
+      onRecolor: handleRecolor,
+      onNodeRecolor: handleNodeRecolor,
+      onExpand: handleExpand,
+      onImagine: handleImagine,
+      onDelete: handleDelete,
+      onRetry: handleRetry,
+      onNote: handleNote,
+      onUpdateTitle: handleUpdateTitle,
+      onSubmitRootPrompt: handleSubmitRootPrompt,
+      onRefreshFollowUps: handleRefreshFollowUps,
+      onCreateDraftFollowUp: handleCreateDraftFollowUp,
+    }),
+    [
+      handleAsk,
+      handleRecolor,
+      handleNodeRecolor,
+      handleExpand,
+      handleImagine,
+      handleDelete,
+      handleRetry,
+      handleNote,
+      handleUpdateTitle,
+      handleSubmitRootPrompt,
+      handleRefreshFollowUps,
+      handleCreateDraftFollowUp,
+    ]
+  );
 
-  const imageCallbacks = useMemo(() => ({
-    onDelete: handleDelete,
-    onRegenerate: handleRegenerateImage,
-    onSelectImage: handleSelectImage,
-  }), [handleDelete, handleRegenerateImage, handleSelectImage]);
+  const imageCallbacks = useMemo(
+    () => ({
+      onDelete: handleDelete,
+      onRegenerate: handleRegenerateImage,
+      onSelectImage: handleSelectImage,
+    }),
+    [handleDelete, handleRegenerateImage, handleSelectImage]
+  );
 
-  const noteCallbacks = useMemo(() => ({
-    onDelete: handleDelete,
-    onUpdateNote: handleUpdateNote,
-  }), [handleDelete, handleUpdateNote]);
+  const noteCallbacks = useMemo(
+    () => ({
+      onDelete: handleDelete,
+      onUpdateNote: handleUpdateNote,
+    }),
+    [handleDelete, handleUpdateNote]
+  );
 
-  const nodesWithCallbacks = useMemo(() =>
-    nodes.map((n) => ({
-      ...n,
-      data: {
-        ...n.data,
-        ...(n.type === 'qa' ? qaCallbacks : n.type === 'image' ? imageCallbacks : n.type === 'note' ? noteCallbacks : { onDelete: handleDelete }),
-      },
-    })),
+  const nodes = store.graph.nodes;
+
+  const nodesWithCallbacks = useMemo(
+    () =>
+      nodes.map((n) => ({
+        ...n,
+        data: {
+          ...n.data,
+          ...(n.type === 'qa'
+            ? qaCallbacks
+            : n.type === 'image'
+              ? imageCallbacks
+              : n.type === 'note'
+                ? noteCallbacks
+                : { onDelete: handleDelete }),
+        },
+      })),
     [nodes, qaCallbacks, imageCallbacks, noteCallbacks, handleDelete]
   );
 
+  const canUndo = canUndoTimeline(store.timeline);
+  const canRedo = canRedoTimeline(store.timeline);
+
   return {
     nodes: nodesWithCallbacks,
-    edges,
-    setEdges,
+    edges: store.graph.edges,
     onNodesChange,
     onEdgesChange,
+    onConnect,
     initialPrompt,
     setInitialPrompt,
     sparkQuestion,
     handleInitialSubmit,
     handleClearCanvas,
     createNodeAt,
+    canUndo,
+    canRedo,
+    undo,
+    redo,
+    refreshSparkPrompt,
+    canvasList,
+    activeCanvasId,
+    selectCanvas,
+    createBlankCanvas,
   };
 }

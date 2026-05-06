@@ -13,10 +13,7 @@ import {
   BackgroundVariant,
   Panel,
   MarkerType,
-  addEdge,
   useReactFlow,
-  type Connection,
-  type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -25,21 +22,31 @@ import ImageNode from './ImageNode';
 import NoteNode from './NoteNode';
 import FloatingEdge from './FloatingEdge';
 import NodeSearch from './NodeSearch';
+import ByokSettingsPanel from './ByokSettingsPanel';
 import { useCanvasGraph } from '@/hooks/useCanvasGraph';
 
 export default function ExplorationCanvas() {
   const {
     nodes,
     edges,
-    setEdges,
     onNodesChange,
     onEdgesChange,
+    onConnect,
     initialPrompt,
     setInitialPrompt,
     sparkQuestion,
     handleInitialSubmit,
     handleClearCanvas,
     createNodeAt,
+    canUndo,
+    canRedo,
+    undo,
+    redo,
+    refreshSparkPrompt,
+    canvasList,
+    activeCanvasId,
+    selectCanvas,
+    createBlankCanvas,
   } = useCanvasGraph();
 
   const { screenToFlowPosition } = useReactFlow();
@@ -58,20 +65,6 @@ export default function ExplorationCanvas() {
       createNodeAt(position);
     }
   }, [screenToFlowPosition, createNodeAt]);
-
-  const onConnect = useCallback((connection: Connection) => {
-    const newEdge: Edge = {
-      id: `edge-${connection.source}-${connection.target}-${Date.now()}`,
-      source: connection.source,
-      target: connection.target,
-      sourceHandle: connection.sourceHandle,
-      targetHandle: connection.targetHandle,
-      type: 'floating',
-      style: { stroke: '#94a3b8', strokeWidth: 2 },
-      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#94a3b8' },
-    };
-    setEdges((prev) => addEdge(newEdge, prev));
-  }, [setEdges]);
 
   return (
     <div className="w-screen h-screen">
@@ -93,6 +86,37 @@ export default function ExplorationCanvas() {
         defaultViewport={{ x: 0, y: 0, zoom: 0.8 }}
         proOptions={{ hideAttribution: true }}
       >
+        {activeCanvasId && canvasList.length > 0 ? (
+          <Panel position="top-left">
+            <div className="flex gap-2 items-center">
+              <label htmlFor="canvas-picker" className="sr-only">
+                Active canvas
+              </label>
+              <select
+                id="canvas-picker"
+                value={activeCanvasId}
+                onChange={(e) => selectCanvas(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white/95 text-gray-800 shadow max-w-[10rem] sm:max-w-[14rem]"
+                title="Switch canvas"
+              >
+                {canvasList.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={createBlankCanvas}
+                className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 bg-white/95 text-gray-700 hover:text-gray-900 shadow"
+                title="Create a new blank canvas"
+              >
+                New
+              </button>
+            </div>
+          </Panel>
+        ) : null}
+        <ByokSettingsPanel onKeyChange={refreshSparkPrompt} />
         <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#d1d5db" />
         <Controls className="!bg-white !border-gray-200 !shadow-lg !rounded-lg" />
         <MiniMap
@@ -104,6 +128,32 @@ export default function ExplorationCanvas() {
         {nodes.length > 0 && (
           <Panel position="top-right">
             <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={undo}
+                disabled={!canUndo}
+                className="px-3 py-1.5 bg-white/90 backdrop-blur text-xs text-gray-500 hover:text-gray-700 rounded-lg shadow border border-gray-200 transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-500"
+                title="Undo (⌘Z or Ctrl+Z)"
+              >
+                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 7v6h6" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Undo
+              </button>
+              <button
+                type="button"
+                onClick={redo}
+                disabled={!canRedo}
+                className="px-3 py-1.5 bg-white/90 backdrop-blur text-xs text-gray-500 hover:text-gray-700 rounded-lg shadow border border-gray-200 transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-500"
+                title="Redo (⌘⇧Z or Ctrl+Y)"
+              >
+                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 7v6h-6" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M3 17a9 9 0 019-9 9 9 0 016 2.3L21 13" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Redo
+              </button>
               <button
                 onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))}
                 className="px-3 py-1.5 bg-white/90 backdrop-blur text-xs text-gray-500 hover:text-gray-700 rounded-lg shadow border border-gray-200 transition-colors flex items-center gap-1.5"

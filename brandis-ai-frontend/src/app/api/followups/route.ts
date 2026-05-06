@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import { openaiFromRequest } from '@/app/api/_lib/openaiFromRequest';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+export const dynamic = 'force-dynamic';
 
 type FollowUpsRequest = {
   question: string;
@@ -26,6 +24,10 @@ function parseFollowUpQuestions(raw: string): string[] {
 
 export async function POST(req: Request) {
   try {
+    const openaiOrResponse = openaiFromRequest(req);
+    if (openaiOrResponse instanceof NextResponse) return openaiOrResponse;
+    const openai = openaiOrResponse;
+
     const { question, answer } = (await req.json()) as FollowUpsRequest;
 
     if (!question?.trim() || !answer?.trim()) {

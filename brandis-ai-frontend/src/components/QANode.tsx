@@ -6,9 +6,35 @@
  */
 import { memo, useCallback, useState, useRef, useEffect } from 'react';
 import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
-import { QANodeData, SuggestedKeyword, PersistedMark } from '@/types/canvas';
-import { getNextHex, tint, contrastText, darken } from '@/lib/colors';
+import {
+  type QAModelOutputRevision,
+  QANodeRuntimeFlags,
+  QAProductPayload,
+} from '@/types/canvas';
+import { getNextHex, tint, darken } from '@/lib/colors';
 import ColorPicker from './ColorPicker';
+import QANodeHeader from './QANodeHeader';
+import QANodeFollowUps from './QANodeFollowUps';
+import QANodePromptComposer from './QANodePromptComposer';
+import {
+  buildSpans,
+  splitProseBlocks,
+  getHighlightTextShadow,
+  parseResponseSegments,
+  type ActiveMark,
+} from './qaNodeText';
+
+function formatSupersededAt(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  } catch {
+    return iso;
+  }
+}
+
+function revisionSourceLabel(source: QAModelOutputRevision['source']): string {
+  return source === 'expand' ? 'Before expand' : 'Regenerated';
+}
 
 export type MarkPayload = {
   text: string;
@@ -38,137 +64,9 @@ export type QANodeCallbacks = {
 };
 
 type QANodeProps = NodeProps & {
-  data: QANodeData & QANodeCallbacks & {
-    isLoading?: boolean;
-    isExpanding?: boolean;
-    hasFailed?: boolean;
-    isAwaitingPrompt?: boolean;
-  };
+  /** Product payload + runtime flags merged on `data`; callbacks injected by canvas hook. */
+  data: QAProductPayload & QANodeCallbacks & QANodeRuntimeFlags;
 };
-
-type ActiveMark = {
-  id: string;
-  text: string;
-  startIndex: number;
-  endIndex: number;
-};
-
-type Span = {
-  start: number;
-  end: number;
-  type: 'plain' | 'keyword' | 'persisted' | 'active';
-  hex?: string;
-  targetNodeId?: string;
-};
-
-function buildSpans(
-  textLength: number,
-  keywords: SuggestedKeyword[],
-  persistedMarks: PersistedMark[],
-  activeMarks: ActiveMark[],
-  activeHex: string
-): Span[] {
-  const points = new Set<number>();
-  points.add(0);
-  points.add(textLength);
-
-  type Region = {
-    start: number; end: number;
-    type: 'keyword' | 'persisted' | 'active';
-    hex?: string; targetNodeId?: string; priority: number;
-  };
-  const regions: Region[] = [];
-
-  for (const kw of keywords) {
-    points.add(kw.startIndex);
-    points.add(kw.endIndex);
-    regions.push({ start: kw.startIndex, end: kw.endIndex, type: 'keyword', hex: kw.hex, priority: 0 });
-  }
-  for (const m of persistedMarks) {
-    points.add(m.startIndex);
-    points.add(m.endIndex);
-    regions.push({
-      start: m.startIndex, end: m.endIndex, type: 'persisted',
-      hex: m.color, targetNodeId: m.targetNodeId, priority: 2,
-    });
-  }
-  for (const m of activeMarks) {
-    points.add(m.startIndex);
-    points.add(m.endIndex);
-    regions.push({ start: m.startIndex, end: m.endIndex, type: 'active', hex: activeHex, priority: 1 });
-  }
-
-  const sorted = Array.from(points).sort((a, b) => a - b);
-  const spans: Span[] = [];
-
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const start = sorted[i];
-    const end = sorted[i + 1];
-    if (start === end) continue;
-
-    const covering = regions
-      .filter((r) => r.start <= start && r.end >= end)
-      .sort((a, b) => b.priority - a.priority);
-
-    if (covering.length > 0) {
-      const top = covering[0];
-      spans.push({ start, end, type: top.type, hex: top.hex, targetNodeId: top.targetNodeId });
-    } else {
-      spans.push({ start, end, type: 'plain' });
-    }
-  }
-
-  return spans;
-}
-
-type ProseBlock =
-  | { type: 'paragraph'; text: string; offset: number }
-  | { type: 'list'; items: { text: string; offset: number }[] };
-
-const LIST_RE = /^(?:[-*]|\d+[.)]) /;
-
-function splitProseBlocks(text: string): ProseBlock[] {
-  const lines = text.split('\n');
-  const blocks: ProseBlock[] = [];
-  let pos = 0;
-
-  let currentList: { text: string; offset: number }[] | null = null;
-
-  for (const line of lines) {
-    const trimmed = line.trimStart();
-    const indent = line.length - trimmed.length;
-
-    if (LIST_RE.test(trimmed)) {
-      const bulletLen = trimmed.match(LIST_RE)![0].length;
-      const itemText = trimmed.substring(bulletLen);
-      const itemOffset = pos + indent + bulletLen;
-
-      if (!currentList) currentList = [];
-      currentList.push({ text: itemText, offset: itemOffset });
-    } else {
-      if (currentList) {
-        blocks.push({ type: 'list', items: currentList });
-        currentList = null;
-      }
-      if (trimmed.length > 0) {
-        blocks.push({ type: 'paragraph', text: trimmed, offset: pos + indent });
-      }
-    }
-
-    pos += line.length + 1; // +1 for the newline
-  }
-
-  if (currentList) {
-    blocks.push({ type: 'list', items: currentList });
-  }
-
-  return blocks;
-}
-
-function getHighlightTextShadow(hex: string): string {
-  const shadowColor = darken(hex, 0.55);
-  return `0 0.6px 0 ${shadowColor}40, 0 1.2px 2px ${shadowColor}30`;
-}
 
 function QANode({ data }: QANodeProps) {
   const [promptText, setPromptText] = useState('');
@@ -184,6 +82,7 @@ function QANode({ data }: QANodeProps) {
   const [rootPromptText, setRootPromptText] = useState('');
   const [isRefreshingFollowUps, setIsRefreshingFollowUps] = useState(false);
   const [followUpsCollapsed, setFollowUpsCollapsed] = useState(false);
+  const [priorAnswersOpen, setPriorAnswersOpen] = useState(false);
   const responseRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const rootPromptTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -386,26 +285,11 @@ function QANode({ data }: QANodeProps) {
     setShowNodeColor(false);
   }, [activeMarks, data.persistedMarks]);
 
-  // Parse response into prose/code segments
-  type Segment = { type: 'prose'; text: string; offset: number } | { type: 'code'; lang: string; code: string; offset: number };
-  const segments: Segment[] = [];
-  if (data.aiResponse) {
-    const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
-    let lastEnd = 0;
-    let match;
-    while ((match = codeBlockRegex.exec(data.aiResponse)) !== null) {
-      if (match.index > lastEnd) {
-        segments.push({ type: 'prose', text: data.aiResponse.substring(lastEnd, match.index), offset: lastEnd });
-      }
-      segments.push({ type: 'code', lang: match[1] || '', code: match[2].trim(), offset: match.index });
-      lastEnd = match.index + match[0].length;
-    }
-    if (lastEnd < data.aiResponse.length) {
-      segments.push({ type: 'prose', text: data.aiResponse.substring(lastEnd), offset: lastEnd });
-    }
-  }
+  const segments = parseResponseSegments(data.aiResponse);
 
   const isReady = !data.isLoading && !data.isExpanding && !!data.aiResponse;
+
+  const priorAnswers = data.answerRevisions ?? [];
 
   return (
     <div className="relative group" style={{ minWidth: 280, width: '100%', height: '100%' }}>
@@ -421,93 +305,29 @@ function QANode({ data }: QANodeProps) {
       >
         <Handle type="target" position={Position.Top} />
 
-        {/* Header */}
-        <div
-          className="px-4 py-3 border-b flex items-start gap-2"
-          style={{
-            backgroundColor: tint(nodeHex, 0.15),
-            borderColor: tint(nodeHex, 0.25),
-            borderLeft: `4px solid ${nodeHex}`,
+        <QANodeHeader
+          nodeHex={nodeHex}
+          title={data.title}
+          userPrompt={data.userPrompt}
+          branchedFromText={data.branchedFromText}
+          editingTitle={editingTitle}
+          titleDraft={titleDraft}
+          setTitleDraft={setTitleDraft}
+          setEditingTitle={setEditingTitle}
+          showOriginalPrompt={showOriginalPrompt}
+          setShowOriginalPrompt={setShowOriginalPrompt}
+          collapsed={collapsed}
+          onToggleCollapsed={() => setCollapsed((c) => !c)}
+          onToggleNodeColor={() => {
+            setShowNodeColor((v) => !v);
+            setRecolorTarget(null);
+            setShowPrompt(false);
           }}
-        >
-          <div className="flex-1 min-w-0">
-            {editingTitle ? (
-              <input
-                ref={titleInputRef}
-                value={titleDraft}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleSaveTitle();
-                  if (e.key === 'Escape') setEditingTitle(false);
-                }}
-                onBlur={handleSaveTitle}
-                className="w-full text-sm font-medium text-gray-900 bg-white/80 border border-gray-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-400 nodrag nopan"
-              />
-            ) : (
-              <p
-                className="text-sm font-medium text-gray-900 cursor-pointer hover:underline decoration-dotted underline-offset-2"
-                onClick={handleStartEditTitle}
-                title="Click to rename"
-              >
-                {data.title || data.userPrompt || 'Untitled'}
-              </p>
-            )}
-            {data.branchedFromText && (
-              <span className="text-xs text-gray-500 mt-0.5 inline-block">
-                from &quot;{data.branchedFromText}&quot;
-              </span>
-            )}
-            {showOriginalPrompt && data.userPrompt && (
-              <p className="text-xs text-gray-500 mt-1 italic">
-                Prompt: {data.userPrompt}
-              </p>
-            )}
-          </div>
-          <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
-            {data.userPrompt && (
-              <button
-                onClick={() => setShowOriginalPrompt((v) => !v)}
-                className={`p-1 transition-colors rounded ${showOriginalPrompt ? 'text-gray-700' : 'text-gray-400 hover:text-gray-700'}`}
-                title={showOriginalPrompt ? 'Hide original prompt' : 'Show original prompt'}
-              >
-                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  {showOriginalPrompt ? (
-                    <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24M1 1l22 22" strokeLinecap="round" strokeLinejoin="round" />
-                  ) : (
-                    <>
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" strokeLinecap="round" strokeLinejoin="round" />
-                      <circle cx="12" cy="12" r="3" />
-                    </>
-                  )}
-                </svg>
-              </button>
-            )}
-            <button
-              onClick={() => { setShowNodeColor((v) => !v); setRecolorTarget(null); setShowPrompt(false); }}
-              className="w-4 h-4 rounded-full border-2 border-gray-300 hover:border-gray-500 transition-colors"
-              style={{ backgroundColor: nodeHex }}
-              title="Change node color"
-            />
-            <button
-              onClick={() => setCollapsed((c) => !c)}
-              className="p-1 text-gray-400 hover:text-gray-700 transition-colors rounded"
-              title={collapsed ? 'Expand node' : 'Collapse node'}
-            >
-              <svg className={`w-3.5 h-3.5 transition-transform ${collapsed ? '' : 'rotate-180'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M19 9l-7 7-7-7" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-            <button
-              onClick={() => data.onDelete(data.id)}
-              className="p-1 text-gray-400 hover:text-red-500 transition-colors rounded"
-              title="Remove node"
-            >
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-          </div>
-        </div>
+          onDelete={() => data.onDelete(data.id)}
+          onStartEditTitle={handleStartEditTitle}
+          onSaveTitle={handleSaveTitle}
+          titleInputRef={titleInputRef}
+        />
 
         {/* Node color picker */}
         {showNodeColor && (
@@ -688,47 +508,67 @@ function QANode({ data }: QANodeProps) {
                   </div>
                 </div>
 
-                {Array.isArray(data.followUpQuestions) && data.followUpQuestions.length > 0 && (
+                {priorAnswers.length > 0 && (
                   <div
-                    className="px-4 py-2 border-t space-y-2"
-                    style={{ borderColor: tint(nodeHex, 0.15) }}
+                    className="border-t nodrag nopan"
+                    style={{
+                      borderColor: tint(nodeHex, 0.12),
+                      backgroundColor: tint(nodeHex, 0.04),
+                    }}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs text-gray-500">Next useful questions</p>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => setFollowUpsCollapsed((v) => !v)}
-                          className="text-xs text-gray-400 hover:text-gray-700 transition-colors"
-                          title={followUpsCollapsed ? 'Expand questions' : 'Collapse questions'}
-                        >
-                          {followUpsCollapsed ? 'Expand' : 'Collapse'}
-                        </button>
-                        <button
-                          onClick={handleRefreshFollowUps}
-                          disabled={isRefreshingFollowUps}
-                          className="text-xs text-gray-400 hover:text-gray-700 transition-colors disabled:opacity-50"
-                          title="Give new questions"
-                        >
-                          {isRefreshingFollowUps ? 'Refreshing...' : 'Give new questions'}
-                        </button>
-                      </div>
-                    </div>
-                    {!followUpsCollapsed && (
-                      <div className="flex flex-wrap gap-1.5">
-                        {data.followUpQuestions.map((question, index) => (
-                          <button
-                            key={`${data.id}-followup-${index}`}
-                            onClick={() => handleAskFollowUp(question)}
-                            className="text-xs px-2 py-1 rounded-full border border-gray-200 bg-white text-gray-600 hover:text-gray-900 hover:border-gray-300 transition-colors"
-                            title="Ask this follow-up"
+                    <button
+                      type="button"
+                      onClick={() => setPriorAnswersOpen((o) => !o)}
+                      aria-expanded={priorAnswersOpen}
+                      className="w-full px-4 py-2 text-left text-xs font-medium text-gray-500 hover:text-gray-800 hover:bg-black/[0.03] transition-colors flex items-center gap-2"
+                    >
+                      <svg
+                        className={`w-3 h-3 shrink-0 transition-transform ${priorAnswersOpen ? 'rotate-90' : ''}`}
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        aria-hidden
+                      >
+                        <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      Prior answers ({priorAnswers.length})
+                    </button>
+                    {priorAnswersOpen && (
+                      <div className="px-4 pb-3 space-y-2 max-h-56 overflow-y-auto border-t border-gray-200/60">
+                        {[...priorAnswers].reverse().map((rev) => (
+                          <details
+                            key={rev.id}
+                            className="rounded-lg border border-gray-200/90 bg-white/70 overflow-hidden"
                           >
-                            {question}
-                          </button>
+                            <summary className="px-3 py-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden flex flex-wrap gap-x-2 gap-y-1 items-baseline justify-between">
+                              <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                                {revisionSourceLabel(rev.source)}
+                              </span>
+                              <time className="text-[10px] text-gray-400 shrink-0" dateTime={rev.supersededAt}>
+                                {formatSupersededAt(rev.supersededAt)}
+                              </time>
+                            </summary>
+                            <div className="px-3 pb-2 pt-0 text-xs text-gray-600 whitespace-pre-wrap max-h-32 overflow-y-auto border-t border-gray-100 bg-white/60">
+                              {rev.aiResponse}
+                            </div>
+                          </details>
                         ))}
                       </div>
                     )}
                   </div>
                 )}
+
+                <QANodeFollowUps
+                  nodeId={data.id}
+                  nodeHex={nodeHex}
+                  questions={data.followUpQuestions}
+                  collapsed={followUpsCollapsed}
+                  isRefreshing={isRefreshingFollowUps}
+                  onToggleCollapsed={() => setFollowUpsCollapsed((v) => !v)}
+                  onRefresh={handleRefreshFollowUps}
+                  onAskFollowUp={handleAskFollowUp}
+                />
 
                 {/* Action buttons */}
                 <div className="px-4 py-1.5 border-t flex justify-end gap-3"
@@ -787,83 +627,19 @@ function QANode({ data }: QANodeProps) {
 
             {/* Active marks + prompt */}
             {showPrompt && (
-              <div className="px-4 py-3 border-t"
-                   style={{ backgroundColor: tint(nodeHex, 0.1), borderColor: tint(nodeHex, 0.15) }}>
-                {activeMarks.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mb-2">
-                    {activeMarks.map((m) => (
-                      <span
-                        key={m.id}
-                        className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium"
-                        style={{
-                          backgroundColor: tint(activeHex, 0.2),
-                          color: darken(activeHex, 0.2),
-                        }}
-                      >
-                        {m.text}
-                        <button
-                          onClick={() => handleRemoveMark(m.id)}
-                          className="opacity-50 hover:opacity-100 transition-opacity leading-none"
-                        >
-                          ✕
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <div className="flex items-center gap-2 mb-2 nodrag nopan">
-                  <span className="text-xs text-gray-500">Color:</span>
-                  <ColorPicker value={activeHex} onChange={(hex) => setSelectedHex(hex)} />
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={promptText}
-                    onChange={(e) => setPromptText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleSubmit();
-                      if (e.key === 'Escape') handleClosePrompt();
-                    }}
-                    placeholder={activeMarks.length ? 'Add a question (optional)' : 'Ask something...'}
-                    className="flex-1 min-w-0 text-sm px-2 py-1.5 rounded border border-gray-200 bg-white
-                               focus:outline-none focus:ring-2 focus:ring-gray-400 text-gray-700
-                               placeholder:text-gray-400 nodrag nopan"
-                    autoFocus
-                  />
-                  <button
-                    onClick={handleClosePrompt}
-                    className="shrink-0 px-2 py-1.5 text-sm text-gray-400 hover:text-gray-600 transition-colors"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  <button
-                    onClick={handleSubmit}
-                    disabled={activeMarks.length === 0 && !promptText.trim()}
-                    className="px-3 py-1 text-xs rounded hover:opacity-90 disabled:opacity-40 transition-all font-medium"
-                    style={{ backgroundColor: activeHex, color: contrastText(activeHex) }}
-                  >
-                    Ask
-                  </button>
-                  <button
-                    onClick={handleNoteSubmit}
-                    className="px-3 py-1 text-xs rounded hover:opacity-90 transition-all font-medium
-                               bg-amber-500 text-white"
-                    title="Add a personal note"
-                  >
-                    Note
-                  </button>
-                  <button
-                    onClick={handleImagineSubmit}
-                    className="px-3 py-1 text-xs rounded hover:opacity-90 transition-all font-medium
-                               bg-indigo-500 text-white"
-                    title="Generate an image from this prompt"
-                  >
-                    Imagine
-                  </button>
-                </div>
-              </div>
+              <QANodePromptComposer
+                nodeHex={nodeHex}
+                activeMarks={activeMarks}
+                activeHex={activeHex}
+                promptText={promptText}
+                onPromptTextChange={setPromptText}
+                onSetHex={setSelectedHex}
+                onRemoveMark={handleRemoveMark}
+                onClose={handleClosePrompt}
+                onAsk={handleSubmit}
+                onNote={handleNoteSubmit}
+                onImagine={handleImagineSubmit}
+              />
             )}
           </div>
         )}
