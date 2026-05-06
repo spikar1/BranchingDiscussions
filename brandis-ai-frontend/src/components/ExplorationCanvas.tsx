@@ -37,6 +37,10 @@ export default function ExplorationCanvas() {
     handleInitialSubmit,
     handleClearCanvas,
     createNodeAt,
+    canUndo,
+    canRedo,
+    undo,
+    redo,
   } = useCanvasGraph();
 
   const { screenToFlowPosition } = useReactFlow();
@@ -87,6 +91,32 @@ export default function ExplorationCanvas() {
         {nodes.length > 0 && (
           <Panel position="top-right">
             <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={undo}
+                disabled={!canUndo}
+                className="px-3 py-1.5 bg-white/90 backdrop-blur text-xs text-gray-500 hover:text-gray-700 rounded-lg shadow border border-gray-200 transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-500"
+                title="Undo (⌘Z or Ctrl+Z)"
+              >
+                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 7v6h6" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Undo
+              </button>
+              <button
+                type="button"
+                onClick={redo}
+                disabled={!canRedo}
+                className="px-3 py-1.5 bg-white/90 backdrop-blur text-xs text-gray-500 hover:text-gray-700 rounded-lg shadow border border-gray-200 transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-500"
+                title="Redo (⌘⇧Z or Ctrl+Y)"
+              >
+                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 7v6h-6" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M3 17a9 9 0 019-9 9 9 0 016 2.3L21 13" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Redo
+              </button>
               <button
                 onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))}
                 className="px-3 py-1.5 bg-white/90 backdrop-blur text-xs text-gray-500 hover:text-gray-700 rounded-lg shadow border border-gray-200 transition-colors flex items-center gap-1.5"

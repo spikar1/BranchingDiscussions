@@ -45,7 +45,27 @@ export function appendRevision(
   return { entries, headIndex: entries.length - 1 };
 }
 
-/** Recompute graph at `timeline.headIndex` (for assertions, future undo/redo). */
+export function canUndoTimeline(timeline: CanvasRevisionTimeline): boolean {
+  return timeline.headIndex >= 0;
+}
+
+export function canRedoTimeline(timeline: CanvasRevisionTimeline): boolean {
+  return (
+    timeline.entries.length > 0 && timeline.headIndex < timeline.entries.length - 1
+  );
+}
+
+export function undoTimeline(timeline: CanvasRevisionTimeline): CanvasRevisionTimeline | null {
+  if (!canUndoTimeline(timeline)) return null;
+  return { ...timeline, headIndex: timeline.headIndex - 1 };
+}
+
+export function redoTimeline(timeline: CanvasRevisionTimeline): CanvasRevisionTimeline | null {
+  if (!canRedoTimeline(timeline)) return null;
+  return { ...timeline, headIndex: timeline.headIndex + 1 };
+}
+
+/** Recompute graph at `timeline.headIndex` (undo/redo replay, tests). */
 export function replayTimeline(timeline: CanvasRevisionTimeline): CanvasGraphState {
   let state: CanvasGraphState = { nodes: [], edges: [] };
   if (timeline.headIndex < 0) return state;

@@ -19,7 +19,16 @@ import {
   type CanvasGraphCommand,
   type CanvasGraphState,
 } from './canvasGraphCommands';
-import { appendRevision, emptyTimeline, type CanvasRevisionTimeline } from './canvasRevisionTimeline';
+import {
+  appendRevision,
+  canRedoTimeline,
+  canUndoTimeline,
+  emptyTimeline,
+  redoTimeline,
+  replayTimeline,
+  undoTimeline,
+  type CanvasRevisionTimeline,
+} from './canvasRevisionTimeline';
 import {
   createEdge,
   createImageReactFlowNode,
@@ -70,6 +79,22 @@ export function useCanvasGraph() {
       graph: applyCanvasGraphCommand(graph, cmd),
       timeline: appendRevision(timeline, cmd),
     }));
+  }, []);
+
+  const undo = useCallback(() => {
+    setStore(({ graph, timeline }) => {
+      const nextTimeline = undoTimeline(timeline);
+      if (!nextTimeline) return { graph, timeline };
+      return { graph: replayTimeline(nextTimeline), timeline: nextTimeline };
+    });
+  }, []);
+
+  const redo = useCallback(() => {
+    setStore(({ graph, timeline }) => {
+      const nextTimeline = redoTimeline(timeline);
+      if (!nextTimeline) return { graph, timeline };
+      return { graph: replayTimeline(nextTimeline), timeline: nextTimeline };
+    });
   }, []);
 
   const applyTransient = useCallback((cmd: CanvasGraphCommand) => {
@@ -139,6 +164,42 @@ export function useCanvasGraph() {
       debouncedSave(store.graph.nodes, store.graph.edges);
     }
   }, [store.graph.nodes, store.graph.edges]);
+
+  useEffect(() => {
+    const isTextEditingTarget = (t: EventTarget | null) => {
+      if (!t || !(t instanceof HTMLElement)) return false;
+      if (t.isContentEditable) return true;
+      const tag = t.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!e.metaKey && !e.ctrlKey) return;
+      if (isTextEditingTarget(e.target)) return;
+
+      const key = e.key.toLowerCase();
+
+      if (key === 'z' && !e.shiftKey) {
+        if (!canUndoTimeline(storeRef.current.timeline)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        undo();
+        return;
+      }
+
+      const redoChord =
+        (key === 'z' && e.shiftKey) || (e.ctrlKey && !e.metaKey && key === 'y');
+      if (redoChord) {
+        if (!canRedoTimeline(storeRef.current.timeline)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        redo();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [undo, redo]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -665,7 +726,11 @@ export function useCanvasGraph() {
   );
 
   const handleClearCanvas = useCallback(() => {
-    if (window.confirm('Clear the entire canvas? This cannot be undone.')) {
+    if (
+      window.confirm(
+        'Clear the entire canvas? You can use Undo to bring it back until you make other changes.'
+      )
+    ) {
       commit({ kind: 'set-graph', nodes: [], edges: [] });
       clearCanvas();
     }
@@ -836,6 +901,9 @@ export function useCanvasGraph() {
     [nodes, qaCallbacks, imageCallbacks, noteCallbacks, handleDelete]
   );
 
+  const canUndo = canUndoTimeline(store.timeline);
+  const canRedo = canRedoTimeline(store.timeline);
+
   return {
     nodes: nodesWithCallbacks,
     edges: store.graph.edges,
@@ -848,5 +916,9 @@ export function useCanvasGraph() {
     handleInitialSubmit,
     handleClearCanvas,
     createNodeAt,
+    canUndo,
+    canRedo,
+    undo,
+    redo,
   };
 }
