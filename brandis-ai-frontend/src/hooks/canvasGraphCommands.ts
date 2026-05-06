@@ -78,7 +78,11 @@ export type CanvasGraphCommand =
       targetNodeId: string;
     }
   | { kind: 'append-nodes'; nodes: Node[] }
-  | { kind: 'set-edge-label-by-target'; targetNodeId: string; label: string };
+  | { kind: 'set-edge-label-by-target'; targetNodeId: string; label: string }
+  | {
+      kind: 'set-nodes-hidden';
+      updates: readonly { nodeId: string; hidden: boolean }[];
+    };
 
 const MAX_BATCH_DEPTH = 64;
 
@@ -293,6 +297,16 @@ export function applyCanvasGraphCommand(
             : e
         ),
       };
+
+    case 'set-nodes-hidden': {
+      const hiddenById = new Map(cmd.updates.map((u) => [u.nodeId, u.hidden] as const));
+      return {
+        ...state,
+        nodes: state.nodes.map((n) =>
+          hiddenById.has(n.id) ? { ...n, hidden: hiddenById.get(n.id) } : n
+        ),
+      };
+    }
 
     default: {
       const _exhaustive: never = cmd;

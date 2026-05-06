@@ -61,11 +61,17 @@ export type QANodeCallbacks = {
   onSubmitRootPrompt?: (nodeId: string, prompt: string) => void;
   onRefreshFollowUps?: (nodeId: string) => Promise<void>;
   onCreateDraftFollowUp?: (sourceNodeId: string, prompt: string, hex: string) => void;
+  /** Toggle visibility of inputs hidden by Combine selection (PRD). */
+  onToggleCombineSources?: (combinedNodeId: string) => void;
 };
 
 type QANodeProps = NodeProps & {
   /** Product payload + runtime flags merged on `data`; callbacks injected by canvas hook. */
-  data: QAProductPayload & QANodeCallbacks & QANodeRuntimeFlags;
+  data: QAProductPayload &
+    QANodeCallbacks &
+    QANodeRuntimeFlags & {
+      combineSourcesHidden?: boolean;
+    };
 };
 
 function QANode({ data }: QANodeProps) {
@@ -83,6 +89,7 @@ function QANode({ data }: QANodeProps) {
   const [isRefreshingFollowUps, setIsRefreshingFollowUps] = useState(false);
   const [followUpsCollapsed, setFollowUpsCollapsed] = useState(false);
   const [priorAnswersOpen, setPriorAnswersOpen] = useState(false);
+  const [combinePinnedOpen, setCombinePinnedOpen] = useState(false);
   const responseRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const rootPromptTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -92,9 +99,11 @@ function QANode({ data }: QANodeProps) {
   const defaultHex = getNextHex(usedColorCount);
   const activeHex = selectedHex ?? defaultHex;
 
+  const combineCount = (data.combineSourceIds ?? []).length;
   const summaryCount = (data.summarySourceIds ?? []).length;
   const nodeHex =
-    data.branchColor || (summaryCount > 0 ? '#94a3b8' : '#e5e7eb');
+    data.branchColor ||
+    (combineCount > 0 ? '#c4b5fd' : summaryCount > 0 ? '#94a3b8' : '#e5e7eb');
 
   useEffect(() => {
     if (data.isAwaitingPrompt) {
@@ -312,7 +321,14 @@ function QANode({ data }: QANodeProps) {
           title={data.title}
           userPrompt={data.userPrompt}
           branchedFromText={data.branchedFromText}
-          summarySourceCount={(data.summarySourceIds ?? []).length}
+          summarySourceCount={summaryCount}
+          combineSourceCount={combineCount}
+          combineSourcesHidden={data.combineSourcesHidden}
+          onToggleCombineSources={
+            combineCount > 0 && data.onToggleCombineSources
+              ? () => data.onToggleCombineSources!(data.id)
+              : undefined
+          }
           editingTitle={editingTitle}
           titleDraft={titleDraft}
           setTitleDraft={setTitleDraft}
@@ -510,6 +526,52 @@ function QANode({ data }: QANodeProps) {
                     })}
                   </div>
                 </div>
+
+                {(data.combineBasisSnapshots ?? []).length > 0 && (
+                  <div
+                    className="border-t nodrag nopan"
+                    style={{
+                      borderColor: tint(nodeHex, 0.12),
+                      backgroundColor: tint(nodeHex, 0.04),
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setCombinePinnedOpen((o) => !o)}
+                      aria-expanded={combinePinnedOpen}
+                      className="w-full px-4 py-2 text-left text-xs font-medium text-gray-500 hover:text-gray-800 hover:bg-black/[0.03] transition-colors flex items-center gap-2"
+                    >
+                      <svg
+                        className={`w-3 h-3 shrink-0 transition-transform ${combinePinnedOpen ? 'rotate-90' : ''}`}
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        aria-hidden
+                      >
+                        <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      Pinned inputs at combine ({(data.combineBasisSnapshots ?? []).length})
+                    </button>
+                    {combinePinnedOpen && (
+                      <div className="px-4 pb-3 space-y-2 max-h-56 overflow-y-auto border-t border-gray-200/60">
+                        {(data.combineBasisSnapshots ?? []).map((snap) => (
+                          <details
+                            key={snap.nodeId}
+                            className="rounded-lg border border-violet-100 bg-white/80 overflow-hidden"
+                          >
+                            <summary className="px-3 py-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden text-xs font-medium text-violet-900">
+                              {snap.label}
+                            </summary>
+                            <div className="px-3 pb-2 pt-0 text-[11px] text-gray-600 whitespace-pre-wrap max-h-36 overflow-y-auto border-t border-violet-50 bg-white/70">
+                              {snap.text}
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {priorAnswers.length > 0 && (
                   <div

@@ -21,6 +21,10 @@ type QANodeHeaderProps = {
   titleInputRef: RefObject<HTMLInputElement>;
   /** When > 0, this node was created via Summarize selection (PRD). */
   summarySourceCount?: number;
+  /** Combine synthesis — upstream nodes hidden on the map by default. */
+  combineSourceCount?: number;
+  combineSourcesHidden?: boolean;
+  onToggleCombineSources?: () => void;
 };
 
 export default function QANodeHeader({
@@ -42,6 +46,9 @@ export default function QANodeHeader({
   onSaveTitle,
   titleInputRef,
   summarySourceCount = 0,
+  combineSourceCount = 0,
+  combineSourcesHidden,
+  onToggleCombineSources,
 }: QANodeHeaderProps) {
   return (
     <div
@@ -74,7 +81,28 @@ export default function QANodeHeader({
             {title || userPrompt || 'Untitled'}
           </p>
         )}
-        {summarySourceCount > 0 && !editingTitle ? (
+        {combineSourceCount > 0 && !editingTitle ? (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <span
+              className="inline-flex max-w-full items-center rounded-md border border-violet-200/95 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-800"
+              title="Synthesis from multiple canvas inputs; originals stay pinned below"
+            >
+              Synthesis · {combineSourceCount} inputs
+            </span>
+            {onToggleCombineSources ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleCombineSources();
+                }}
+                className="text-[11px] font-medium text-violet-700 hover:text-violet-950 underline decoration-dotted underline-offset-2"
+              >
+                {(combineSourcesHidden ?? true) ? 'Show nodes on map' : 'Hide nodes on map'}
+              </button>
+            ) : null}
+          </div>
+        ) : summarySourceCount > 0 && !editingTitle ? (
           <span
             className="mt-1.5 inline-flex max-w-full items-center rounded-md border border-slate-200/90 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600"
             title="Created from multiple selected nodes on the map"

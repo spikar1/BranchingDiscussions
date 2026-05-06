@@ -21,6 +21,13 @@ export type PersistedMark = {
   targetNodeId: string;
 };
 
+/** Text pinned at combine time; upstream edits do not change this basis (PRD combine). */
+export type CombineBasisSnapshot = {
+  nodeId: string;
+  label: string;
+  text: string;
+};
+
 /** Prior model output before retry / expand (Task F, §4.4 / §10). */
 export type QAModelOutputRevision = {
   id: string;
@@ -50,6 +57,10 @@ export type QAProductPayload = {
   branchColor: string | null;
   /** Set when this Q&A node was created via Summarize selection — keeps provenance with edges to these node ids. */
   summarySourceIds?: string[];
+  /** Combined synthesis: canvas nodes merged into this living node; inputs hidden by default on the map. */
+  combineSourceIds?: string[];
+  /** Snapshot of each input’s text at combine time (basis for the synthesis). */
+  combineBasisSnapshots?: CombineBasisSnapshot[];
   createdAt: Date;
 };
 

@@ -38,7 +38,9 @@ export default function ExplorationCanvas() {
     handleInitialSubmit,
     handleClearCanvas,
     handleSummarizeSelection,
+    handleCombineSelection,
     canSummarizeSelection,
+    canCombineSelection,
     selectedNodeCount,
     createNodeAt,
     canUndo,
@@ -146,6 +148,25 @@ export default function ExplorationCanvas() {
                   <path d="M4 6h16M4 12h10M4 18h16" strokeLinecap="round" />
                 </svg>
                 Summarize
+                {selectedNodeCount > 0 ? (
+                  <span className="text-[10px] opacity-70">({selectedNodeCount})</span>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                onClick={handleCombineSelection}
+                disabled={!canCombineSelection}
+                className="px-3 py-1.5 bg-white/90 backdrop-blur text-xs text-violet-700 hover:text-violet-900 rounded-lg shadow border border-violet-200/90 transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-violet-700"
+                title={
+                  canCombineSelection
+                    ? 'Merge selection into one synthesized Q&A node (inputs hidden on map; pinned basis in node)'
+                    : 'Select two or more nodes with readable content (Shift+click)'
+                }
+              >
+                <svg className="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M8 12h8M12 8v8M4 4l4 4M20 4l-4 4M4 20l4-4M20 20l-4-4" strokeLinecap="round" />
+                </svg>
+                Combine
                 {selectedNodeCount > 0 ? (
                   <span className="text-[10px] opacity-70">({selectedNodeCount})</span>
                 ) : null}

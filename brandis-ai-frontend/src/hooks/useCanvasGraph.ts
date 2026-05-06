@@ -11,8 +11,8 @@ import {
 } from '@xyflow/react';
 
 import { type MarkPayload } from '@/components/QANode';
-import { QANodeData, ImageNodeData, NoteNodeData } from '@/types/canvas';
-import { explore, imagine, getFollowUpQuestions, summarizeSelection } from '@/lib/ai';
+import { QANodeData, ImageNodeData, NoteNodeData, type QAProductPayload } from '@/types/canvas';
+import { explore, imagine, getFollowUpQuestions, summarizeSelection, combineSelection } from '@/lib/ai';
 import { withByokHeaders } from '@/lib/byok';
 import {
   appendNewCanvas,
@@ -69,6 +69,14 @@ function stripTransientAILoadingFlags(graph: CanvasGraphState): CanvasGraphState
       },
     })),
   };
+}
+
+/** True when every combine source node is hidden on the canvas (default after combine). */
+function combineSourcesHiddenOnCanvas(graph: CanvasGraphState, combinedNodeId: string): boolean {
+  const node = graph.nodes.find((x) => x.id === combinedNodeId);
+  const ids = (node?.data as QAProductPayload)?.combineSourceIds;
+  if (!ids?.length) return true;
+  return ids.every((id) => graph.nodes.find((x) => x.id === id)?.hidden === true);
 }
 
 /** Interactions that don't mutate product graph state (selection) or are mid-gesture. */
@@ -295,6 +303,25 @@ export function useCanvasGraph() {
 
   const handleDelete = useCallback(
     (nodeId: string) => {
+      const snap = storeRef.current.graph;
+      const node = snap.nodes.find((n) => n.id === nodeId);
+      const combineIds =
+        node?.type === 'qa'
+          ? (node.data as QAProductPayload).combineSourceIds?.filter(Boolean)
+          : undefined;
+      if (combineIds && combineIds.length > 0) {
+        commit({
+          kind: 'batch',
+          commands: [
+            {
+              kind: 'set-nodes-hidden',
+              updates: combineIds.map((id) => ({ nodeId: id, hidden: false })),
+            },
+            { kind: 'delete-node', nodeId },
+          ],
+        });
+        return;
+      }
       commit({ kind: 'delete-node', nodeId });
     },
     [commit]
@@ -875,6 +902,127 @@ export function useCanvasGraph() {
     });
   }, [commit]);
 
+  const handleToggleCombineSources = useCallback(
+    (combinedNodeId: string) => {
+      const snap = storeRef.current.graph;
+      const combined = snap.nodes.find((n) => n.id === combinedNodeId);
+      const ids = (combined?.data as QAProductPayload | undefined)?.combineSourceIds?.filter(
+        Boolean
+      );
+      if (!combined || combined.type !== 'qa' || !ids?.length) return;
+
+      const anyVisible = ids.some((id) => {
+        const src = snap.nodes.find((n) => n.id === id);
+        return src != null && src.hidden !== true;
+      });
+
+      commit({
+        kind: 'set-nodes-hidden',
+        updates: ids.map((id) => ({ nodeId: id, hidden: anyVisible })),
+      });
+    },
+    [commit]
+  );
+
+  const handleCombineSelection = useCallback(() => {
+    const snap = storeRef.current.graph;
+    const selected = snap.nodes.filter((n) => n.selected);
+    const sources = selected
+      .map(nodeToSummarizeSource)
+      .filter((s): s is NonNullable<typeof s> => s != null);
+    if (sources.length < 2) return;
+
+    const nodeId = generateId();
+    const combineSourceIds = sources.map((s) => s.id);
+    const combineBasisSnapshots = sources.map((s) => ({
+      nodeId: s.id,
+      label: s.label,
+      text: s.text,
+    }));
+
+    const nodeData = createQANodeData({
+      id: nodeId,
+      prompt: `Combined synthesis · ${sources.length} canvas inputs`,
+      parentId: null,
+      branchColor: null,
+      combineSourceIds,
+      combineBasisSnapshots,
+    });
+
+    const avgX =
+      selected.reduce((acc, n) => acc + n.position.x, 0) / Math.max(selected.length, 1);
+    const bottomY = Math.max(...selected.map((n) => n.position.y)) + 420;
+
+    const newNode = createQAReactFlowNode(
+      nodeData,
+      { position: { x: avgX - 160, y: bottomY } },
+      { isLoading: true }
+    );
+
+    const combineStroke = '#7c3aed';
+    const edgeCommands: CanvasGraphCommand[] = combineSourceIds.map((sid) => ({
+      kind: 'add-edge' as const,
+      edge: createEdge(
+        sid,
+        nodeId,
+        { stroke: combineStroke, strokeWidth: 2, strokeDasharray: '5 5' },
+        combineStroke,
+        'Combine source'
+      ),
+    }));
+
+    const hideCommands: CanvasGraphCommand[] = [
+      {
+        kind: 'set-nodes-hidden',
+        updates: combineSourceIds.map((id) => ({ nodeId: id, hidden: true })),
+      },
+    ];
+
+    const batch: CanvasGraphCommand = {
+      kind: 'batch',
+      commands: [{ kind: 'append-nodes', nodes: [newNode] }, ...edgeCommands, ...hideCommands],
+    };
+
+    const apiSources = sources.map((s) => ({ id: s.id, label: s.label, text: s.text }));
+
+    setStore(({ graph, timeline }) => {
+      const nextGraph = applyCanvasGraphCommand(graph, batch);
+      const nextTimeline = appendRevision(timeline, batch);
+
+      (async () => {
+        try {
+          const { response, keywords, title, followUpQuestions } =
+            await combineSelection(apiSources);
+          commit({
+            kind: 'patch-qa-data',
+            nodeId,
+            patch: {
+              aiResponse: response,
+              followUpQuestions,
+              keywords,
+              title: title || 'Combined synthesis',
+              isLoading: false,
+            },
+          });
+        } catch (err) {
+          console.error('Combine failed:', err);
+          commit({
+            kind: 'patch-qa-data',
+            nodeId,
+            patch: {
+              isLoading: false,
+              hasFailed: true,
+              aiResponse:
+                'Could not combine the selection. Check your API key in settings and try again.',
+            },
+          });
+        }
+      })();
+
+      return { graph: nextGraph, timeline: nextTimeline };
+    });
+  }, [commit]);
+
   const handleClearCanvas = useCallback(() => {
     if (
       window.confirm(
@@ -996,6 +1144,7 @@ export function useCanvasGraph() {
       onSubmitRootPrompt: handleSubmitRootPrompt,
       onRefreshFollowUps: handleRefreshFollowUps,
       onCreateDraftFollowUp: handleCreateDraftFollowUp,
+      onToggleCombineSources: handleToggleCombineSources,
     }),
     [
       handleAsk,
@@ -1010,6 +1159,7 @@ export function useCanvasGraph() {
       handleSubmitRootPrompt,
       handleRefreshFollowUps,
       handleCreateDraftFollowUp,
+      handleToggleCombineSources,
     ]
   );
 
@@ -1034,20 +1184,33 @@ export function useCanvasGraph() {
 
   const nodesWithCallbacks = useMemo(
     () =>
-      nodes.map((n) => ({
-        ...n,
-        data: {
-          ...n.data,
-          ...(n.type === 'qa'
+      nodes.map((n) => {
+        const baseCallbacks =
+          n.type === 'qa'
             ? qaCallbacks
             : n.type === 'image'
               ? imageCallbacks
               : n.type === 'note'
                 ? noteCallbacks
-                : { onDelete: handleDelete }),
-        },
-      })),
-    [nodes, qaCallbacks, imageCallbacks, noteCallbacks, handleDelete]
+                : { onDelete: handleDelete };
+
+        const qaCombineExtra =
+          n.type === 'qa' && ((n.data as QAProductPayload).combineSourceIds ?? []).length > 0
+            ? {
+                combineSourcesHidden: combineSourcesHiddenOnCanvas(store.graph, n.id),
+              }
+            : {};
+
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            ...baseCallbacks,
+            ...qaCombineExtra,
+          },
+        };
+      }),
+    [nodes, qaCallbacks, imageCallbacks, noteCallbacks, handleDelete, store.graph]
   );
 
   const canUndo = canUndoTimeline(store.timeline);
@@ -1076,7 +1239,9 @@ export function useCanvasGraph() {
     handleInitialSubmit,
     handleClearCanvas,
     handleSummarizeSelection,
+    handleCombineSelection,
     canSummarizeSelection: selectionSummarize.canSummarizeSelection,
+    canCombineSelection: selectionSummarize.canSummarizeSelection,
     selectedNodeCount: selectionSummarize.selectedCount,
     createNodeAt,
     canUndo,

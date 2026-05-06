@@ -1,5 +1,6 @@
 import { MarkerType, type Edge, type Node } from '@xyflow/react';
 import {
+  type CombineBasisSnapshot,
   type CanvasNodeGeometry,
   type CanvasProductEnvelope,
   type ImageProductPayload,
@@ -32,6 +33,19 @@ export function geometryFromReactFlowNode(node: Node): CanvasNodeGeometry {
       (typeof node.height === 'number' ? node.height : undefined) ??
       (typeof node.measured?.height === 'number' ? node.measured!.height : undefined),
   };
+}
+
+function coerceCombineBasisSnapshots(raw: unknown): CombineBasisSnapshot[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw.filter(
+    (x): x is CombineBasisSnapshot =>
+      x != null &&
+      typeof x === 'object' &&
+      typeof (x as CombineBasisSnapshot).nodeId === 'string' &&
+      typeof (x as CombineBasisSnapshot).label === 'string' &&
+      typeof (x as CombineBasisSnapshot).text === 'string'
+  );
+  return out.length > 0 ? out : undefined;
 }
 
 function coerceAnswerRevisions(raw: unknown): QAModelOutputRevision[] {
@@ -67,6 +81,10 @@ export function qaPayloadFromFlowData(
     summarySourceIds: Array.isArray(raw.summarySourceIds)
       ? raw.summarySourceIds.filter((id): id is string => typeof id === 'string')
       : undefined,
+    combineSourceIds: Array.isArray(raw.combineSourceIds)
+      ? raw.combineSourceIds.filter((id): id is string => typeof id === 'string')
+      : undefined,
+    combineBasisSnapshots: coerceCombineBasisSnapshots(raw.combineBasisSnapshots),
     createdAt: raw.createdAt instanceof Date ? raw.createdAt : new Date(String(raw.createdAt)),
   };
 }
@@ -268,6 +286,8 @@ export function createQANodeData(input: {
   branchedFromText?: string | null;
   title?: string;
   summarySourceIds?: string[];
+  combineSourceIds?: string[];
+  combineBasisSnapshots?: CombineBasisSnapshot[];
 }): QAProductPayload {
   return {
     id: input.id,
@@ -284,6 +304,12 @@ export function createQANodeData(input: {
     branchColor: input.branchColor,
     ...(input.summarySourceIds && input.summarySourceIds.length > 0
       ? { summarySourceIds: [...input.summarySourceIds] }
+      : {}),
+    ...(input.combineSourceIds && input.combineSourceIds.length > 0
+      ? { combineSourceIds: [...input.combineSourceIds] }
+      : {}),
+    ...(input.combineBasisSnapshots && input.combineBasisSnapshots.length > 0
+      ? { combineBasisSnapshots: input.combineBasisSnapshots.map((s) => ({ ...s })) }
       : {}),
     createdAt: new Date(),
   };

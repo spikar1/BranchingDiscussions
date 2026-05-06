@@ -108,3 +108,28 @@ export async function summarizeSelection(sources: SummarizeSource[]): Promise<Su
 
   return res.json();
 }
+
+type CombineBasisSource = { id: string; label: string; text: string };
+
+type CombineResult = {
+  response: string;
+  keywords: SuggestedKeyword[];
+  title: string;
+  followUpQuestions: string[];
+};
+
+/** Multi-node synthesis: upstream inputs stay hidden on the map by default (PRD combine). */
+export async function combineSelection(sources: CombineBasisSource[]): Promise<CombineResult> {
+  const res = await fetch('/api/combine', {
+    method: 'POST',
+    headers: withByokHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ sources }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }));
+    throw new Error(err.error ?? `HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
