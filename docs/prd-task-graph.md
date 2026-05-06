@@ -2,6 +2,13 @@
 
 Source: `docs/PRD.md`. Use **one ID per PR/session** where possible.
 
+## Rolling engineering snapshot
+
+Indicative only; **`docs/PRD.md` section 10** is the narrative source of truth.
+
+- **Shipped locally (prototype):** A (product vs RF types), B (command apply), C (per-canvas `localStorage` + registry + legacy migrate), D (timeline entries + replay), E (undo/redo UI + shortcuts), F (retry/expand retain prior output + timeline), G (layout commits on drag/resize end), H (dropdown picker + new canvas), L (BYOK header on API routes + settings UI; env key dev fallback).
+- **Still open for P0:** I (Summarize), J (Combine), K (provenance / global history UI beyond per-node QA revisions). P1: M, N. **D2** still refines provider policy after baseline OpenAI BYOK.
+
 ## Owner decisions (§9 — do not implement without answers)
 
 | ID | Topic |

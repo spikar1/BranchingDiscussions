@@ -1,6 +1,6 @@
 # BrandisAI — Product Requirements Document
 
-**Status:** draft — decisions locked from product conversation; open items need owner answers.  
+**Status:** draft — product decisions locked where stated; §9 remains open until owners answer. **Implementation** is advancing locally; §10 summarizes current code gaps vs locked intent.  
 **Working name:** BrandisAI (may change). Repository folder name may differ.
 
 ---
@@ -36,7 +36,7 @@ Help people **explore many facets of an idea** without losing threads. Linear ch
 
 ### 4.0 Canvases (projects)
 
-The product supports **multiple named canvases** (distinct maps), not a single unbounded graph for all work. Each canvas has its **own node graph, undo/history scope, and export bundle**; switching canvas is an explicit user action (**implementation:** gallery / picker / tabs **TBD**).
+The product supports **multiple named canvases** (distinct maps), not a single unbounded graph for all work. Each canvas has its **own node graph, undo/history scope, and export bundle**; switching canvas is an explicit user action. **Implementation today:** dropdown canvas picker plus create/rename plumbing in local storage; richer gallery or tabs remains **optional polish (TBD)**.
 
 ### 4.1 Branch from answer (existing, must-have)
 
@@ -58,6 +58,7 @@ User selects nodes, then **Combine selection** (second dedicated toolbar button)
 - **Position:** every **position change** produces a **persistent history entry** (layout is undoable / replayable faithfully).
 - **Size:** resizing is **optional**; when no explicit dimensions are recorded, geometry falls back to a **deterministic default** (rule defined per node type / schema version). **Whenever the user explicitly resizes**, that change **records history** (**§4.4** revision default).
 - **P0 revision default:** **Everything that meaningfully mutates canvased content** (**position**, **explicit size**, **title**, **note body**, **`retry` / `expand` / other AI supersessions of answers**, structural ops like **combine** / **summarize**, **create/delete node**, **`edge add` / `edge remove`** via manual connect/disconnect **or** system-created edges) produces a **new revision entry** recoverable via undo/time travel. **Intent:** avoid silent overwrite; **allow refactoring** later if storage or UX becomes painful.
+
 ### 4.5 Quiz (later, low MVP priority)
 
 - **Default:** questions **only** from content present in the user’s graph (closed-book over the map).
@@ -99,7 +100,7 @@ Possible: turn a dense answer into a structured list node while preserving prior
 ## 7. Data & edge cases
 
 - **Delete node:** today removes node and incident edges; with history, define whether delete is **tombstone** or **destructive** in exported bundles.
-- **Retry / regenerate / expand AI:** each **superseding model output** appends a **revision** (no silent overwrite of prior answer text in the history model **§4.4**). **Current code** still replaces in place — **implementation gap §10**.
+- **Retry / regenerate / expand AI:** each **superseding model output** must append revision semantics **§4.4**. **Implementation today:** superseded outputs are retained on the QA node (**`answerRevisions`**) with UI recall, and timeline commands capture the supersession — aligned with locked intent pending broader history UI (**§10**).
 - **Expand answer:** same rule as retry (longer replacement = new revision).
 - **Offline / quota / model errors:** graceful degradation, visible failure state (partially present).
 - **Large graphs:** performance, minimap, search (Node search exists); export size limits.
@@ -129,14 +130,29 @@ Track owner decisions here; remove bullets as they close.
 
 ## 10. Current implementation notes (engineering)
 
-**Keep as foundation**
+**Foundation (still true)**
 
-- **React Flow** canvas, **QANode** selection → branch, **image** and **note** nodes, **FloatingEdge**, **NodeSearch**, **Next API routes** for OpenAI (`explore`, `followups`, `imagine`, `spark`). Routes currently use env `OPENAI_API_KEY`; **BYOK wiring** remains to align with product decision **§2**.
-- **Domain fields** in `QANodeData` (`parentId`, `branchedFromId`, `branchedFromText`, `persistedMarks`) match the product story.
+- **React Flow** canvas, **QANode** selection → branch, **image** and **note** nodes, **FloatingEdge**, **NodeSearch**, **Next API routes** for OpenAI (`explore`, `followups`, `imagine`, `spark`).
+- **Domain fields** on QA payloads (`parentId`, `branchedFromId`, `branchedFromText`, `persistedMarks`) match the branching story.
 
-**Refactor / replace before “history + sync” land**
+**Implemented toward P0 (local-only)**
 
-- **`useCanvasGraph`:** large hook mixing UI state, async AI, and graph ops — should gain a **reducer or command layer** so every mutation is **loggable** for undo and server sync. **Today** many updates **mutate node data in place** (e.g. `retry`, `expand`); product requires **revision append** per **§4.4**.
-- **Persistence:** `localStorage` holds **one snapshot key** today; product requires **indexed storage keyed by canvas id** (or equivalent) plus **named canvas registry**. Replace with **event-sourced or explicit revision store** per canvas while rendering through React Flow.
+- **BYOK §2 / §5:** API routes resolve the OpenAI key from request header first; env `OPENAI_API_KEY` remains a **development fallback**. UI stores user key client-side (**browser local storage**) — sufficient for solo local use; **not** acceptable as the documented long-term server-side pattern once accounts exist **§6**.
+- **`CanvasGraphCommand` + replay:** synchronous graph edits run through **`applyCanvasGraphCommand`** (`canvasGraphCommands.ts`); **`CanvasRevisionTimeline`** stores parent-linked immutable entries (`canvasRevisionTimeline.ts`). **Undo / redo:** toolbar + keyboard shorten the timeline pointer and replay from empty — **§4.4** direction.
+- **Gesture batching:** node **position** and **dimensions** updates are **transient while drag/resize is in progress** and **commit on release** (so layout is undoable without per-frame churn).
+- **Per-canvas persistence:** **`brandis-canvas-registry-v1`** registry plus **`brandis-canvas-doc-v1:<canvasId>`** documents in `localStorage`; legacy single-key snapshot migrates on first load (`persistence.ts`).
+- **Product vs view types:** `*ProductPayload` types separate domain fields from React Flow **position / optional width** (`types/canvas.ts`) — export/history spine **§4.4**.
+- **Retry / expand:** new model output is applied via **`supersede-qa-model-output`**; prior output is appended to **`answerRevisions`** on the node and surfaced in the QA UI — no silent discard of superseded text.
+
+**Still missing or partial vs locked P0**
+
+- **Summarize selection** and **Combine selection** (**§4.2–4.3**): **not shipped** yet (toolbar actions, synthesized node kinds, pinned combine semantics).
+- **History / provenance UI beyond undo:** no **global timeline** or combine **“show sources”** surface yet; lineage is reconstructable from the timeline payload but not productized for users **§4.3–4.4**.
+- **Lossless export/import per canvas (P1 roadmap):** not yet a bundled format carrying the revision log from the snapshot store (**§5** Phase 2).
+- **`useCanvasGraph`:** command/timeline cores exist, but this hook remains the **Orchestration monolith** (async AI + graph + persistence). Expect further extraction for tests, multiplayer sync (**P2**), and hardened mutation coverage.
+- **Indexed / durable storage:** still **`localStorage`** only — sufficient for prototypes; revisit **IDB** or server store before large canvases or sync **§6**.
+
+**Refactor / replace before “sync at scale”**
+
 - **ASP.NET backend:** disconnected from frontend; archive or delete when consolidating stack unless resurrected deliberately.
-- **Types:** unify **product node model** vs **React Flow view state** (`position`, `width`) for clean export/schema versioning. **Position** is always material for history; **width/height** optional with schema defaults.
+- **Harden** delete semantics for export (**tombstone vs destructive** **§7**) once import/export ships.
