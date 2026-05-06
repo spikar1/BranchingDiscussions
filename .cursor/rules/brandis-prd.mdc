@@ -1,0 +1,11 @@
+---
+description: Consult the product PRD before scope, UX, or roadmap-affecting changes
+alwaysApply: true
+---
+
+# BrandisAI product source of truth
+
+- **Before** changing **product scope**, **major UX behavior**, **persistence/sync assumptions**, or **roadmap ordering**, read and align with **`docs/PRD.md`**.
+- Prefer implementing against **locked sections** there; treat **§9 Open decisions** as **unset** until the user confirms—do not silently decide GTM, AI provider policy, or share-link mechanics from code alone.
+- **`§10` implementation notes** call out gaps vs today’s code (e.g. revision-append vs in-place mutation). When touching graph state, undo, or persistence, **check §4.4 and §10** so changes move toward the documented model, not further away.
+- Working name **BrandisAI** may change; repository folder name may differ—use **`docs/PRD.md`** wording over stale strings in code when they conflict.

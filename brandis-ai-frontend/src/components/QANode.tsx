@@ -6,7 +6,7 @@
  */
 import { memo, useCallback, useState, useRef, useEffect } from 'react';
 import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
-import { QANodeData } from '@/types/canvas';
+import { QANodeRuntimeFlags, QAProductPayload } from '@/types/canvas';
 import { getNextHex, tint, darken } from '@/lib/colors';
 import ColorPicker from './ColorPicker';
 import QANodeHeader from './QANodeHeader';
@@ -48,12 +48,8 @@ export type QANodeCallbacks = {
 };
 
 type QANodeProps = NodeProps & {
-  data: QANodeData & QANodeCallbacks & {
-    isLoading?: boolean;
-    isExpanding?: boolean;
-    hasFailed?: boolean;
-    isAwaitingPrompt?: boolean;
-  };
+  /** Product payload + runtime flags merged on `data`; callbacks injected by canvas hook. */
+  data: QAProductPayload & QANodeCallbacks & QANodeRuntimeFlags;
 };
 
 function QANode({ data }: QANodeProps) {

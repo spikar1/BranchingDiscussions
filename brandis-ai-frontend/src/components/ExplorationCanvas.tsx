@@ -13,10 +13,7 @@ import {
   BackgroundVariant,
   Panel,
   MarkerType,
-  addEdge,
   useReactFlow,
-  type Connection,
-  type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -31,9 +28,9 @@ export default function ExplorationCanvas() {
   const {
     nodes,
     edges,
-    setEdges,
     onNodesChange,
     onEdgesChange,
+    onConnect,
     initialPrompt,
     setInitialPrompt,
     sparkQuestion,
@@ -58,20 +55,6 @@ export default function ExplorationCanvas() {
       createNodeAt(position);
     }
   }, [screenToFlowPosition, createNodeAt]);
-
-  const onConnect = useCallback((connection: Connection) => {
-    const newEdge: Edge = {
-      id: `edge-${connection.source}-${connection.target}-${Date.now()}`,
-      source: connection.source,
-      target: connection.target,
-      sourceHandle: connection.sourceHandle,
-      targetHandle: connection.targetHandle,
-      type: 'floating',
-      style: { stroke: '#94a3b8', strokeWidth: 2 },
-      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#94a3b8' },
-    };
-    setEdges((prev) => addEdge(newEdge, prev));
-  }, [setEdges]);
 
   return (
     <div className="w-screen h-screen">

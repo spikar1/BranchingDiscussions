@@ -79,7 +79,7 @@ Possible: turn a dense answer into a structured list node while preserving prior
 
 | Phase | Focus |
 |-------|--------|
-| **P0 — Prove interaction** | **Multiple named canvases** + polished branching canvas; **Summarize selection** + **Combine selection**, with **pinned snapshots** + **history UI** foundation. |
+| **P0 — Prove interaction** | **BYOK mandatory from first usable P0 build:** users supply provider API credentials; no reliance on developer-hosted inference keys alone. Plus **multiple named canvases**, polished branching canvas, **Summarize selection** + **Combine selection**, **pinned snapshots**, **history UI** foundation **§6**.<br><br>**P0 note — inference:** Align all AI entry points (**explore**, **follow-ups**, **imagine**, **spark**) with **§2** / **§6** before widening beta; env-based `OPENAI_API_KEY` is acceptable only as a **dev fallback**, not as the sole production path for real users **§10**. |
 | **P1 — Persistence & export** | Faithful **JSON (or similar) export/import** **per canvas**; revision log travels with canvas bundle; optional **bulk export** (**TBD**). |
 | **P2 — Accounts & sync** | Auth, server store, multi-device; **optional** local snapshot still supported. **Optional:** **view-only share links** (owner-minted), **no** co-editing. |
 | **P3 — Quiz & extensions** | Map-grounded quiz; later open-world quiz option; additional node types as thin shells. |
