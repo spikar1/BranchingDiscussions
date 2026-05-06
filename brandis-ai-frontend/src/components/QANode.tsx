@@ -6,7 +6,11 @@
  */
 import { memo, useCallback, useState, useRef, useEffect } from 'react';
 import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
-import { QANodeRuntimeFlags, QAProductPayload } from '@/types/canvas';
+import {
+  type QAModelOutputRevision,
+  QANodeRuntimeFlags,
+  QAProductPayload,
+} from '@/types/canvas';
 import { getNextHex, tint, darken } from '@/lib/colors';
 import ColorPicker from './ColorPicker';
 import QANodeHeader from './QANodeHeader';
@@ -19,6 +23,18 @@ import {
   parseResponseSegments,
   type ActiveMark,
 } from './qaNodeText';
+
+function formatSupersededAt(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  } catch {
+    return iso;
+  }
+}
+
+function revisionSourceLabel(source: QAModelOutputRevision['source']): string {
+  return source === 'expand' ? 'Before expand' : 'Regenerated';
+}
 
 export type MarkPayload = {
   text: string;
@@ -66,6 +82,7 @@ function QANode({ data }: QANodeProps) {
   const [rootPromptText, setRootPromptText] = useState('');
   const [isRefreshingFollowUps, setIsRefreshingFollowUps] = useState(false);
   const [followUpsCollapsed, setFollowUpsCollapsed] = useState(false);
+  const [priorAnswersOpen, setPriorAnswersOpen] = useState(false);
   const responseRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const rootPromptTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -271,6 +288,8 @@ function QANode({ data }: QANodeProps) {
   const segments = parseResponseSegments(data.aiResponse);
 
   const isReady = !data.isLoading && !data.isExpanding && !!data.aiResponse;
+
+  const priorAnswers = data.answerRevisions ?? [];
 
   return (
     <div className="relative group" style={{ minWidth: 280, width: '100%', height: '100%' }}>
@@ -488,6 +507,57 @@ function QANode({ data }: QANodeProps) {
                     })}
                   </div>
                 </div>
+
+                {priorAnswers.length > 0 && (
+                  <div
+                    className="border-t nodrag nopan"
+                    style={{
+                      borderColor: tint(nodeHex, 0.12),
+                      backgroundColor: tint(nodeHex, 0.04),
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setPriorAnswersOpen((o) => !o)}
+                      aria-expanded={priorAnswersOpen}
+                      className="w-full px-4 py-2 text-left text-xs font-medium text-gray-500 hover:text-gray-800 hover:bg-black/[0.03] transition-colors flex items-center gap-2"
+                    >
+                      <svg
+                        className={`w-3 h-3 shrink-0 transition-transform ${priorAnswersOpen ? 'rotate-90' : ''}`}
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        aria-hidden
+                      >
+                        <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      Prior answers ({priorAnswers.length})
+                    </button>
+                    {priorAnswersOpen && (
+                      <div className="px-4 pb-3 space-y-2 max-h-56 overflow-y-auto border-t border-gray-200/60">
+                        {[...priorAnswers].reverse().map((rev) => (
+                          <details
+                            key={rev.id}
+                            className="rounded-lg border border-gray-200/90 bg-white/70 overflow-hidden"
+                          >
+                            <summary className="px-3 py-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden flex flex-wrap gap-x-2 gap-y-1 items-baseline justify-between">
+                              <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                                {revisionSourceLabel(rev.source)}
+                              </span>
+                              <time className="text-[10px] text-gray-400 shrink-0" dateTime={rev.supersededAt}>
+                                {formatSupersededAt(rev.supersededAt)}
+                              </time>
+                            </summary>
+                            <div className="px-3 pb-2 pt-0 text-xs text-gray-600 whitespace-pre-wrap max-h-32 overflow-y-auto border-t border-gray-100 bg-white/60">
+                              {rev.aiResponse}
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <QANodeFollowUps
                   nodeId={data.id}

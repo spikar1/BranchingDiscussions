@@ -42,7 +42,7 @@ export type QAProductPayload = {
   followUpQuestions: string[];
   keywords: SuggestedKeyword[];
   persistedMarks: PersistedMark[];
-  /** Superseded answers kept for provenance and lossless persistence (timeline is in-memory today). */
+  /** Superseded answers from retry/expand; stored on the node and persisted with the canvas snapshot. */
   answerRevisions: QAModelOutputRevision[];
   parentId: string | null;
   branchedFromId: string | null;
