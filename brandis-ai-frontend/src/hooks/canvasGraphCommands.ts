@@ -1,6 +1,9 @@
 /**
  * Task B (prd-task-graph): all synchronous graph mutations go through
- * `applyCanvasGraphCommand` so they can later be logged for undo / revision replay.
+ * `applyCanvasGraphCommand` so they can be logged for undo / revision replay.
+ *
+ * Task D: `useCanvasGraph` commits each product mutation as a timeline entry (parent-linked);
+ * transient RF updates (selection, in-progress drag/resize) apply without a new revision.
  *
  * React Flow emits structural changes via `react-flow-node-changes` /
  * `react-flow-edge-changes`. App logic uses the other command kinds.

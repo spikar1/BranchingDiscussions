@@ -5,6 +5,7 @@ import {
   MarkerType,
   type Connection,
   type Edge,
+  type EdgeChange,
   type Node,
   type NodeChange,
 } from '@xyflow/react';
@@ -18,6 +19,7 @@ import {
   type CanvasGraphCommand,
   type CanvasGraphState,
 } from './canvasGraphCommands';
+import { appendRevision, emptyTimeline, type CanvasRevisionTimeline } from './canvasRevisionTimeline';
 import {
   createEdge,
   createImageReactFlowNode,
@@ -28,32 +30,77 @@ import {
   generateId,
 } from './canvasGraphUtils';
 
+type CanvasStore = {
+  graph: CanvasGraphState;
+  timeline: CanvasRevisionTimeline;
+};
+
+/** Interactions that don't mutate product graph state (selection) or are mid-gesture. */
+function isTransientNodeChange(changes: NodeChange<Node>[]): boolean {
+  for (const c of changes) {
+    if (c.type === 'position' && c.dragging === true) return true;
+    if (c.type === 'dimensions' && c.resizing === true) return true;
+  }
+  if (changes.length > 0 && changes.every((c) => c.type === 'select')) {
+    return true;
+  }
+  return false;
+}
+
+function isTransientEdgeChange(changes: EdgeChange<Edge>[]): boolean {
+  return changes.length > 0 && changes.every((c) => c.type === 'select');
+}
+
 export function useCanvasGraph() {
-  const [graph, setGraph] = useState<CanvasGraphState>({ nodes: [], edges: [] });
-  const graphRef = useRef(graph);
-  graphRef.current = graph;
+  const [store, setStore] = useState<CanvasStore>({
+    graph: { nodes: [], edges: [] },
+    timeline: emptyTimeline(),
+  });
+  const storeRef = useRef(store);
+  useEffect(() => {
+    storeRef.current = store;
+  }, [store]);
 
   const [initialPrompt, setInitialPrompt] = useState('');
   const [sparkQuestion, setSparkQuestion] = useState('');
   const hasRestored = useRef(false);
 
-  const dispatch = useCallback((cmd: CanvasGraphCommand) => {
-    setGraph((s) => applyCanvasGraphCommand(s, cmd));
+  const commit = useCallback((cmd: CanvasGraphCommand) => {
+    setStore(({ graph, timeline }) => ({
+      graph: applyCanvasGraphCommand(graph, cmd),
+      timeline: appendRevision(timeline, cmd),
+    }));
   }, []);
 
-  const onNodesChange = useCallback((changes: NodeChange<Node>[]) => {
-    setGraph((s) =>
-      applyCanvasGraphCommand(s, { kind: 'react-flow-node-changes', changes })
-    );
+  const applyTransient = useCallback((cmd: CanvasGraphCommand) => {
+    setStore(({ graph, timeline }) => ({
+      graph: applyCanvasGraphCommand(graph, cmd),
+      timeline,
+    }));
   }, []);
+
+  const onNodesChange = useCallback(
+    (changes: NodeChange<Node>[]) => {
+      const cmd: CanvasGraphCommand = { kind: 'react-flow-node-changes', changes };
+      if (isTransientNodeChange(changes)) {
+        applyTransient(cmd);
+      } else {
+        commit(cmd);
+      }
+    },
+    [commit, applyTransient]
+  );
 
   const onEdgesChange = useCallback(
-    (changes: import('@xyflow/react').EdgeChange<Edge>[]) => {
-      setGraph((s) =>
-        applyCanvasGraphCommand(s, { kind: 'react-flow-edge-changes', changes })
-      );
+    (changes: EdgeChange<Edge>[]) => {
+      const cmd: CanvasGraphCommand = { kind: 'react-flow-edge-changes', changes };
+      if (isTransientEdgeChange(changes)) {
+        applyTransient(cmd);
+      } else {
+        commit(cmd);
+      }
     },
-    []
+    [commit, applyTransient]
   );
 
   const onConnect = useCallback(
@@ -68,9 +115,9 @@ export function useCanvasGraph() {
         style: { stroke: '#94a3b8', strokeWidth: 2 },
         markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#94a3b8' },
       };
-      dispatch({ kind: 'add-edge', edge: newEdge });
+      commit({ kind: 'add-edge', edge: newEdge });
     },
-    [dispatch]
+    [commit]
   );
 
   useEffect(() => {
@@ -78,16 +125,20 @@ export function useCanvasGraph() {
     hasRestored.current = true;
     const saved = loadCanvas();
     if (saved && saved.nodes.length > 0) {
-      setGraph({ nodes: saved.nodes, edges: saved.edges });
+      const cmd: CanvasGraphCommand = { kind: 'set-graph', nodes: saved.nodes, edges: saved.edges };
+      setStore({
+        graph: applyCanvasGraphCommand({ nodes: [], edges: [] }, cmd),
+        timeline: appendRevision(emptyTimeline(), cmd),
+      });
     }
   }, []);
 
   useEffect(() => {
     if (!hasRestored.current) return;
-    if (graph.nodes.length > 0) {
-      debouncedSave(graph.nodes, graph.edges);
+    if (store.graph.nodes.length > 0) {
+      debouncedSave(store.graph.nodes, store.graph.edges);
     }
-  }, [graph.nodes, graph.edges]);
+  }, [store.graph.nodes, store.graph.edges]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -102,28 +153,28 @@ export function useCanvasGraph() {
 
   const handleRecolor = useCallback(
     (nodeId: string, targetNodeId: string, newHex: string) => {
-      dispatch({ kind: 'recolor-mark', sourceNodeId: nodeId, targetNodeId, hex: newHex });
+      commit({ kind: 'recolor-mark', sourceNodeId: nodeId, targetNodeId, hex: newHex });
     },
-    [dispatch]
+    [commit]
   );
 
   const handleNodeRecolor = useCallback(
     (nodeId: string, newHex: string) => {
-      dispatch({ kind: 'recolor-node', nodeId, hex: newHex });
+      commit({ kind: 'recolor-node', nodeId, hex: newHex });
     },
-    [dispatch]
+    [commit]
   );
 
   const handleDelete = useCallback(
     (nodeId: string) => {
-      dispatch({ kind: 'delete-node', nodeId });
+      commit({ kind: 'delete-node', nodeId });
     },
-    [dispatch]
+    [commit]
   );
 
   const handleExpand = useCallback(
     (nodeId: string) => {
-      const snap = graphRef.current;
+      const snap = storeRef.current.graph;
       const node = snap.nodes.find((n) => n.id === nodeId);
       if (!node) return;
 
@@ -133,7 +184,7 @@ export function useCanvasGraph() {
         : undefined;
       const parentData = parentNode?.data as QANodeData | undefined;
 
-      dispatch({ kind: 'patch-qa-data', nodeId, patch: { isExpanding: true } });
+      commit({ kind: 'patch-qa-data', nodeId, patch: { isExpanding: true } });
 
       (async () => {
         try {
@@ -146,7 +197,7 @@ export function useCanvasGraph() {
             expand: true,
             currentAnswer: nodeData.aiResponse,
           });
-          dispatch({
+          commit({
             kind: 'patch-qa-data',
             nodeId,
             patch: {
@@ -159,16 +210,16 @@ export function useCanvasGraph() {
           });
         } catch (err) {
           console.error('Expand failed:', err);
-          dispatch({ kind: 'patch-qa-data', nodeId, patch: { isExpanding: false } });
+          commit({ kind: 'patch-qa-data', nodeId, patch: { isExpanding: false } });
         }
       })();
     },
-    [dispatch]
+    [commit]
   );
 
   const handleRetry = useCallback(
     (nodeId: string) => {
-      const snap = graphRef.current;
+      const snap = storeRef.current.graph;
       const node = snap.nodes.find((n) => n.id === nodeId);
       if (!node) return;
 
@@ -178,7 +229,7 @@ export function useCanvasGraph() {
         : undefined;
       const parentData = parentNode?.data as QANodeData | undefined;
 
-      dispatch({
+      commit({
         kind: 'patch-qa-data',
         nodeId,
         patch: { isLoading: true, hasFailed: false, aiResponse: '' },
@@ -193,7 +244,7 @@ export function useCanvasGraph() {
               ? { question: parentData.userPrompt, answer: parentData.aiResponse }
               : undefined,
           });
-          dispatch({
+          commit({
             kind: 'patch-qa-data',
             nodeId,
             patch: {
@@ -206,7 +257,7 @@ export function useCanvasGraph() {
           });
         } catch (err) {
           console.error('Retry failed:', err);
-          dispatch({
+          commit({
             kind: 'patch-qa-data',
             nodeId,
             patch: {
@@ -220,17 +271,17 @@ export function useCanvasGraph() {
         }
       })();
     },
-    [dispatch]
+    [commit]
   );
 
   const handleRegenerateImage = useCallback(
     (imgNodeId: string, newPrompt: string) => {
-      const snap = graphRef.current;
+      const snap = storeRef.current.graph;
       const node = snap.nodes.find((n) => n.id === imgNodeId);
       if (!node) return;
       const capturedContext = (node.data as ImageNodeData).context ?? '';
 
-      dispatch({
+      commit({
         kind: 'patch-image-data',
         nodeId: imgNodeId,
         patch: { prompt: newPrompt, isLoading: true },
@@ -242,9 +293,9 @@ export function useCanvasGraph() {
             prompt: newPrompt,
             context: capturedContext || undefined,
           });
-          const latest = graphRef.current.nodes.find((n) => n.id === imgNodeId);
+          const latest = storeRef.current.graph.nodes.find((n) => n.id === imgNodeId);
           const nd = latest?.data as ImageNodeData | undefined;
-          dispatch({
+          commit({
             kind: 'patch-image-data',
             nodeId: imgNodeId,
             patch: {
@@ -256,41 +307,40 @@ export function useCanvasGraph() {
           });
         } catch (err) {
           console.error('Image regeneration failed:', err);
-          dispatch({ kind: 'patch-image-data', nodeId: imgNodeId, patch: { isLoading: false } });
+          commit({ kind: 'patch-image-data', nodeId: imgNodeId, patch: { isLoading: false } });
         }
       })();
     },
-    [dispatch]
+    [commit]
   );
 
   const handleSelectImage = useCallback(
     (imgNodeId: string, url: string) => {
-      setGraph((state) => {
-        const n = state.nodes.find((x) => x.id === imgNodeId);
-        if (!n) return state;
-        const nd = n.data as ImageNodeData;
-        const entry = nd.images.find((img) => img.url === url);
-        return applyCanvasGraphCommand(state, {
-          kind: 'patch-image-data',
-          nodeId: imgNodeId,
-          patch: {
-            imageUrl: url,
-            title: entry?.title ?? nd.title,
-            prompt: entry?.prompt ?? nd.prompt,
-          },
-        });
+      const snap = storeRef.current.graph;
+      const n = snap.nodes.find((x) => x.id === imgNodeId);
+      if (!n) return;
+      const nd = n.data as ImageNodeData;
+      const entry = nd.images.find((img) => img.url === url);
+      commit({
+        kind: 'patch-image-data',
+        nodeId: imgNodeId,
+        patch: {
+          imageUrl: url,
+          title: entry?.title ?? nd.title,
+          prompt: entry?.prompt ?? nd.prompt,
+        },
       });
     },
-    []
+    [commit]
   );
 
   const handleImagine = useCallback(
     (nodeId: string, prompt: string, context: string) => {
-      setGraph((current) => {
-        const sourceNode = current.nodes.find((n) => n.id === nodeId);
-        if (!sourceNode) return current;
+      setStore(({ graph, timeline }) => {
+        const sourceNode = graph.nodes.find((n) => n.id === nodeId);
+        if (!sourceNode) return { graph, timeline };
 
-        const siblingCount = current.nodes.filter((n) => {
+        const siblingCount = graph.nodes.filter((n) => {
           const d = n.data as QANodeData | ImageNodeData;
           return d.parentId === nodeId;
         }).length;
@@ -318,13 +368,20 @@ export function useCanvasGraph() {
           '#818cf8'
         );
 
-        let next = applyCanvasGraphCommand(current, { kind: 'append-nodes', nodes: [newNode] });
-        next = applyCanvasGraphCommand(next, { kind: 'add-edge', edge: newEdge });
+        const batch: CanvasGraphCommand = {
+          kind: 'batch',
+          commands: [
+            { kind: 'append-nodes', nodes: [newNode] },
+            { kind: 'add-edge', edge: newEdge },
+          ],
+        };
+        const nextGraph = applyCanvasGraphCommand(graph, batch);
+        const nextTimeline = appendRevision(timeline, batch);
 
         (async () => {
           try {
             const { imageUrl, title } = await imagine({ prompt, context: context || undefined });
-            dispatch({
+            commit({
               kind: 'patch-image-data',
               nodeId: imgNodeId,
               patch: {
@@ -336,78 +393,89 @@ export function useCanvasGraph() {
             });
           } catch (err) {
             console.error('Image generation failed:', err);
-            dispatch({ kind: 'delete-node', nodeId: imgNodeId });
+            commit({ kind: 'delete-node', nodeId: imgNodeId });
           }
         })();
 
-        return next;
+        return { graph: nextGraph, timeline: nextTimeline };
       });
     },
-    [dispatch]
+    [commit]
   );
 
-  const handleNote = useCallback(
-    (sourceNodeId: string, marks: MarkPayload[], hex: string, fromText?: string) => {
-      setGraph((current) => {
-        const sourceNode = current.nodes.find((n) => n.id === sourceNodeId);
-        if (!sourceNode) return current;
+  const handleNote = useCallback((sourceNodeId: string, marks: MarkPayload[], hex: string, fromText?: string) => {
+    setStore(({ graph, timeline }) => {
+      const sourceNode = graph.nodes.find((n) => n.id === sourceNodeId);
+      if (!sourceNode) return { graph, timeline };
 
-        const siblingCount = current.nodes.filter((n) => {
-          const d = n.data as QANodeData | ImageNodeData | NoteNodeData;
-          return 'parentId' in d && d.parentId === sourceNodeId;
-        }).length;
+      const siblingCount = graph.nodes.filter((n) => {
+        const d = n.data as QANodeData | ImageNodeData | NoteNodeData;
+        return 'parentId' in d && d.parentId === sourceNodeId;
+      }).length;
 
-        const position = findChildPosition(sourceNode, siblingCount);
-        const nodeId = generateId();
+      const position = findChildPosition(sourceNode, siblingCount);
+      const nodeId = generateId();
 
-        const noteData: NoteNodeData = {
-          id: nodeId,
-          parentId: sourceNodeId,
-          content: '',
-          branchColor: hex,
-          createdAt: new Date(),
-        };
+      const noteData: NoteNodeData = {
+        id: nodeId,
+        parentId: sourceNodeId,
+        content: '',
+        branchColor: hex,
+        createdAt: new Date(),
+      };
 
-        const newNode = createNoteReactFlowNode(noteData, { position });
+      const newNode = createNoteReactFlowNode(noteData, { position });
 
-        const newEdge = createEdge(
-          sourceNodeId,
-          nodeId,
-          { stroke: hex, strokeWidth: 2, strokeDasharray: '4 4' },
-          hex,
-          fromText || 'Note'
-        );
+      const newEdge = createEdge(
+        sourceNodeId,
+        nodeId,
+        { stroke: hex, strokeWidth: 2, strokeDasharray: '4 4' },
+        hex,
+        fromText || 'Note'
+      );
 
-        let next = applyCanvasGraphCommand(current, {
-          kind: 'append-persisted-marks',
-          sourceNodeId,
-          marks,
-          color: hex,
-          targetNodeId: nodeId,
-        });
-        next = applyCanvasGraphCommand(next, { kind: 'append-nodes', nodes: [newNode] });
-        next = applyCanvasGraphCommand(next, { kind: 'add-edge', edge: newEdge });
-        return next;
-      });
-    },
-    []
-  );
+      const batch: CanvasGraphCommand = {
+        kind: 'batch',
+        commands: [
+          {
+            kind: 'append-persisted-marks',
+            sourceNodeId,
+            marks,
+            color: hex,
+            targetNodeId: nodeId,
+          },
+          { kind: 'append-nodes', nodes: [newNode] },
+          { kind: 'add-edge', edge: newEdge },
+        ],
+      };
+      return {
+        graph: applyCanvasGraphCommand(graph, batch),
+        timeline: appendRevision(timeline, batch),
+      };
+    });
+  }, []);
 
   const handleUpdateNote = useCallback(
     (nodeId: string, content: string) => {
-      dispatch({ kind: 'patch-note-data', nodeId, patch: { content } });
+      commit({ kind: 'patch-note-data', nodeId, patch: { content } });
     },
-    [dispatch]
+    [commit]
   );
 
   const handleAsk = useCallback(
-    (sourceNodeId: string, prompt: string, marks: MarkPayload[], hex: string, fromText?: string) => {
-      setGraph((current) => {
-        const sourceNode = current.nodes.find((n) => n.id === sourceNodeId);
-        if (!sourceNode) return current;
+    (
+      sourceNodeId: string,
+      prompt: string,
+      marks: MarkPayload[],
+      hex: string,
+      fromText?: string
+    ) => {
+      setStore(({ graph, timeline }) => {
+        const sourceNode = graph.nodes.find((n) => n.id === sourceNodeId);
+        if (!sourceNode) return { graph, timeline };
 
         const sourceData = sourceNode.data as QANodeData;
-        const siblingCount = current.nodes.filter(
+        const siblingCount = graph.nodes.filter(
           (n) => (n.data as QANodeData).parentId === sourceNodeId
         ).length;
 
@@ -434,15 +502,22 @@ export function useCanvasGraph() {
           fromText || prompt
         );
 
-        let next = applyCanvasGraphCommand(current, {
-          kind: 'append-persisted-marks',
-          sourceNodeId,
-          marks,
-          color: hex,
-          targetNodeId: nodeId,
-        });
-        next = applyCanvasGraphCommand(next, { kind: 'append-nodes', nodes: [newNode] });
-        next = applyCanvasGraphCommand(next, { kind: 'add-edge', edge: newEdge });
+        const batch: CanvasGraphCommand = {
+          kind: 'batch',
+          commands: [
+            {
+              kind: 'append-persisted-marks',
+              sourceNodeId,
+              marks,
+              color: hex,
+              targetNodeId: nodeId,
+            },
+            { kind: 'append-nodes', nodes: [newNode] },
+            { kind: 'add-edge', edge: newEdge },
+          ],
+        };
+        const nextGraph = applyCanvasGraphCommand(graph, batch);
+        const nextTimeline = appendRevision(timeline, batch);
 
         (async () => {
           try {
@@ -453,7 +528,7 @@ export function useCanvasGraph() {
                 ? { question: sourceData.userPrompt, answer: sourceData.aiResponse }
                 : undefined,
             });
-            dispatch({
+            commit({
               kind: 'patch-qa-data',
               nodeId,
               patch: {
@@ -466,7 +541,7 @@ export function useCanvasGraph() {
             });
           } catch (err) {
             console.error('AI request failed:', err);
-            dispatch({
+            commit({
               kind: 'patch-qa-data',
               nodeId,
               patch: {
@@ -480,49 +555,54 @@ export function useCanvasGraph() {
           }
         })();
 
-        return next;
+        return { graph: nextGraph, timeline: nextTimeline };
       });
     },
-    [dispatch]
+    [commit]
   );
 
-  const handleCreateDraftFollowUp = useCallback(
-    (sourceNodeId: string, prompt: string, hex: string) => {
-      setGraph((current) => {
-        const sourceNode = current.nodes.find((n) => n.id === sourceNodeId);
-        if (!sourceNode) return current;
+  const handleCreateDraftFollowUp = useCallback((sourceNodeId: string, prompt: string, hex: string) => {
+    setStore(({ graph, timeline }) => {
+      const sourceNode = graph.nodes.find((n) => n.id === sourceNodeId);
+      if (!sourceNode) return { graph, timeline };
 
-        const siblingCount = current.nodes.filter(
-          (n) => (n.data as QANodeData).parentId === sourceNodeId
-        ).length;
-        const position = findChildPosition(sourceNode, siblingCount);
-        const nodeId = generateId();
+      const siblingCount = graph.nodes.filter(
+        (n) => (n.data as QANodeData).parentId === sourceNodeId
+      ).length;
+      const position = findChildPosition(sourceNode, siblingCount);
+      const nodeId = generateId();
 
-        const nodeData = createQANodeData({
-          id: nodeId,
-          prompt,
-          parentId: sourceNodeId,
-          branchColor: hex,
-          title: 'New Follow-Up Question',
-        });
-
-        const newNode = createQAReactFlowNode(nodeData, { position }, { isAwaitingPrompt: true });
-
-        const newEdge = createEdge(
-          sourceNodeId,
-          nodeId,
-          { stroke: hex, strokeWidth: 2 },
-          hex,
-          prompt
-        );
-
-        let next = applyCanvasGraphCommand(current, { kind: 'append-nodes', nodes: [newNode] });
-        next = applyCanvasGraphCommand(next, { kind: 'add-edge', edge: newEdge });
-        return next;
+      const nodeData = createQANodeData({
+        id: nodeId,
+        prompt,
+        parentId: sourceNodeId,
+        branchColor: hex,
+        title: 'New Follow-Up Question',
       });
-    },
-    []
-  );
+
+      const newNode = createQAReactFlowNode(nodeData, { position }, { isAwaitingPrompt: true });
+
+      const newEdge = createEdge(
+        sourceNodeId,
+        nodeId,
+        { stroke: hex, strokeWidth: 2 },
+        hex,
+        prompt
+      );
+
+      const batch: CanvasGraphCommand = {
+        kind: 'batch',
+        commands: [
+          { kind: 'append-nodes', nodes: [newNode] },
+          { kind: 'add-edge', edge: newEdge },
+        ],
+      };
+      return {
+        graph: applyCanvasGraphCommand(graph, batch),
+        timeline: appendRevision(timeline, batch),
+      };
+    });
+  }, []);
 
   const createRootNode = useCallback(
     (prompt: string) => {
@@ -541,12 +621,12 @@ export function useCanvasGraph() {
         { isLoading: true }
       );
 
-      dispatch({ kind: 'set-graph', nodes: [newNode], edges: [] });
+      commit({ kind: 'set-graph', nodes: [newNode], edges: [] });
 
       (async () => {
         try {
           const { response, keywords, title, followUpQuestions } = await explore({ prompt });
-          dispatch({
+          commit({
             kind: 'patch-qa-data',
             nodeId,
             patch: {
@@ -559,7 +639,7 @@ export function useCanvasGraph() {
           });
         } catch (err) {
           console.error('AI request failed:', err);
-          dispatch({
+          commit({
             kind: 'patch-qa-data',
             nodeId,
             patch: {
@@ -573,7 +653,7 @@ export function useCanvasGraph() {
         }
       })();
     },
-    [dispatch]
+    [commit]
   );
 
   const handleInitialSubmit = useCallback(
@@ -589,16 +669,16 @@ export function useCanvasGraph() {
 
   const handleClearCanvas = useCallback(() => {
     if (window.confirm('Clear the entire canvas? This cannot be undone.')) {
-      dispatch({ kind: 'set-graph', nodes: [], edges: [] });
+      commit({ kind: 'set-graph', nodes: [], edges: [] });
       clearCanvas();
     }
-  }, [dispatch]);
+  }, [commit]);
 
   const handleUpdateTitle = useCallback(
     (nodeId: string, newTitle: string) => {
-      dispatch({ kind: 'patch-qa-data', nodeId, patch: { title: newTitle } });
+      commit({ kind: 'patch-qa-data', nodeId, patch: { title: newTitle } });
     },
-    [dispatch]
+    [commit]
   );
 
   const createNodeAt = useCallback(
@@ -611,14 +691,14 @@ export function useCanvasGraph() {
         branchColor: null,
       });
       const newNode = createQAReactFlowNode(nodeData, { position }, { isAwaitingPrompt: true });
-      dispatch({ kind: 'append-nodes', nodes: [newNode] });
+      commit({ kind: 'append-nodes', nodes: [newNode] });
     },
-    [dispatch]
+    [commit]
   );
 
   const handleSubmitRootPrompt = useCallback(
     (nodeId: string, prompt: string) => {
-      const snap = graphRef.current;
+      const snap = storeRef.current.graph;
       const targetNode = snap.nodes.find((n) => n.id === nodeId);
       if (!targetNode) return;
       const targetData = targetNode.data as QANodeData;
@@ -627,7 +707,7 @@ export function useCanvasGraph() {
         : undefined;
       const parentData = parentNode?.data as QANodeData | undefined;
 
-      dispatch({
+      commit({
         kind: 'batch',
         commands: [
           {
@@ -647,7 +727,7 @@ export function useCanvasGraph() {
               ? { question: parentData.userPrompt, answer: parentData.aiResponse }
               : undefined,
           });
-          dispatch({
+          commit({
             kind: 'patch-qa-data',
             nodeId,
             patch: {
@@ -660,7 +740,7 @@ export function useCanvasGraph() {
           });
         } catch (err) {
           console.error('Root prompt failed:', err);
-          dispatch({
+          commit({
             kind: 'patch-qa-data',
             nodeId,
             patch: { isLoading: false, hasFailed: true },
@@ -668,12 +748,12 @@ export function useCanvasGraph() {
         }
       })();
     },
-    [dispatch]
+    [commit]
   );
 
   const handleRefreshFollowUps = useCallback(
     async (nodeId: string) => {
-      const target = graphRef.current.nodes.find((n) => n.id === nodeId);
+      const target = storeRef.current.graph.nodes.find((n) => n.id === nodeId);
       if (!target) return;
       const nodeData = target.data as QANodeData;
       if (!nodeData.userPrompt || !nodeData.aiResponse) return;
@@ -683,12 +763,12 @@ export function useCanvasGraph() {
           question: nodeData.userPrompt,
           answer: nodeData.aiResponse,
         });
-        dispatch({ kind: 'patch-qa-data', nodeId, patch: { followUpQuestions } });
+        commit({ kind: 'patch-qa-data', nodeId, patch: { followUpQuestions } });
       } catch (err) {
         console.error('Follow-up refresh failed:', err);
       }
     },
-    [dispatch]
+    [commit]
   );
 
   const qaCallbacks = useMemo(
@@ -739,7 +819,7 @@ export function useCanvasGraph() {
     [handleDelete, handleUpdateNote]
   );
 
-  const nodes = graph.nodes;
+  const nodes = store.graph.nodes;
 
   const nodesWithCallbacks = useMemo(
     () =>
@@ -761,7 +841,7 @@ export function useCanvasGraph() {
 
   return {
     nodes: nodesWithCallbacks,
-    edges: graph.edges,
+    edges: store.graph.edges,
     onNodesChange,
     onEdgesChange,
     onConnect,
