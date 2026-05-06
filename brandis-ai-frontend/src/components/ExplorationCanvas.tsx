@@ -37,6 +37,9 @@ export default function ExplorationCanvas() {
     sparkQuestion,
     handleInitialSubmit,
     handleClearCanvas,
+    handleSummarizeSelection,
+    canSummarizeSelection,
+    selectedNodeCount,
     createNodeAt,
     canUndo,
     canRedo,
@@ -128,6 +131,25 @@ export default function ExplorationCanvas() {
         {nodes.length > 0 && (
           <Panel position="top-right">
             <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleSummarizeSelection}
+                disabled={!canSummarizeSelection}
+                className="px-3 py-1.5 bg-white/90 backdrop-blur text-xs text-gray-500 hover:text-gray-700 rounded-lg shadow border border-gray-200 transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-500"
+                title={
+                  canSummarizeSelection
+                    ? 'Summarize selected nodes into one Q&A node (Shift+click to multi-select)'
+                    : 'Select two or more nodes with readable content (Shift+click)'
+                }
+              >
+                <svg className="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M4 6h16M4 12h10M4 18h16" strokeLinecap="round" />
+                </svg>
+                Summarize
+                {selectedNodeCount > 0 ? (
+                  <span className="text-[10px] opacity-70">({selectedNodeCount})</span>
+                ) : null}
+              </button>
               <button
                 type="button"
                 onClick={undo}

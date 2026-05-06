@@ -19,6 +19,8 @@ type QANodeHeaderProps = {
   onStartEditTitle: () => void;
   onSaveTitle: () => void;
   titleInputRef: RefObject<HTMLInputElement>;
+  /** When > 0, this node was created via Summarize selection (PRD). */
+  summarySourceCount?: number;
 };
 
 export default function QANodeHeader({
@@ -39,6 +41,7 @@ export default function QANodeHeader({
   onStartEditTitle,
   onSaveTitle,
   titleInputRef,
+  summarySourceCount = 0,
 }: QANodeHeaderProps) {
   return (
     <div
@@ -49,7 +52,7 @@ export default function QANodeHeader({
         borderLeft: `4px solid ${nodeHex}`,
       }}
     >
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 overflow-hidden">
         {editingTitle ? (
           <input
             ref={titleInputRef}
@@ -60,17 +63,25 @@ export default function QANodeHeader({
               if (e.key === 'Escape') setEditingTitle(false);
             }}
             onBlur={onSaveTitle}
-            className="w-full text-sm font-medium text-gray-900 bg-white/80 border border-gray-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-400 nodrag nopan"
+            className="w-full min-w-0 text-sm font-medium text-gray-900 bg-white/80 border border-gray-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-400 nodrag nopan"
           />
         ) : (
           <p
-            className="text-sm font-medium text-gray-900 cursor-pointer hover:underline decoration-dotted underline-offset-2"
+            className="text-sm font-medium text-gray-900 cursor-pointer hover:underline decoration-dotted underline-offset-2 break-words"
             onClick={onStartEditTitle}
             title="Click to rename"
           >
             {title || userPrompt || 'Untitled'}
           </p>
         )}
+        {summarySourceCount > 0 && !editingTitle ? (
+          <span
+            className="mt-1.5 inline-flex max-w-full items-center rounded-md border border-slate-200/90 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600"
+            title="Created from multiple selected nodes on the map"
+          >
+            Reference · {summarySourceCount} sources
+          </span>
+        ) : null}
         {branchedFromText && (
           <span className="text-xs text-gray-500 mt-0.5 inline-block">
             from &quot;{branchedFromText}&quot;

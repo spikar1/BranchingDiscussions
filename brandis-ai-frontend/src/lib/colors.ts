@@ -13,8 +13,31 @@ export function getNextHex(index: number): string {
   return presetHexColors[index % presetHexColors.length];
 }
 
+const DEFAULT_HEX = '#64748b';
+
+/**
+ * Canonical `#rrggbb` for tint/darken and inline hex+alpha hacks in the canvas UI.
+ * Model output occasionally returns shorthand or non-hex labels; NaN RGB breaks paints for the whole node subtree.
+ */
+export function sanitizeHex(hex: string | undefined, fallback = DEFAULT_HEX): string {
+  if (hex == null || typeof hex !== 'string') return fallback;
+  let h = hex.trim();
+  if (h.startsWith('#')) h = h.slice(1);
+  if (h.length === 3 && /^[0-9a-fA-F]{3}$/.test(h)) {
+    h = h
+      .split('')
+      .map((c) => c + c)
+      .join('');
+  }
+  if (/^[0-9a-fA-F]{6}$/.test(h)) {
+    return `#${h.toLowerCase()}`;
+  }
+  return fallback;
+}
+
 export function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.replace('#', '');
+  const canon = sanitizeHex(hex);
+  const h = canon.slice(1);
   return [
     parseInt(h.substring(0, 2), 16),
     parseInt(h.substring(2, 4), 16),

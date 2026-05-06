@@ -12,7 +12,7 @@ import {
 
 import { type MarkPayload } from '@/components/QANode';
 import { QANodeData, ImageNodeData, NoteNodeData } from '@/types/canvas';
-import { explore, imagine, getFollowUpQuestions } from '@/lib/ai';
+import { explore, imagine, getFollowUpQuestions, summarizeSelection } from '@/lib/ai';
 import { withByokHeaders } from '@/lib/byok';
 import {
   appendNewCanvas,
@@ -47,6 +47,7 @@ import {
   createQANodeData,
   findChildPosition,
   generateId,
+  nodeToSummarizeSource,
 } from './canvasGraphUtils';
 
 type CanvasStore = {
@@ -791,6 +792,89 @@ export function useCanvasGraph() {
     [initialPrompt, sparkQuestion, createRootNode]
   );
 
+  const handleSummarizeSelection = useCallback(() => {
+    const snap = storeRef.current.graph;
+    const selected = snap.nodes.filter((n) => n.selected);
+    const sources = selected
+      .map(nodeToSummarizeSource)
+      .filter((s): s is NonNullable<typeof s> => s != null);
+    if (sources.length < 2) return;
+
+    const nodeId = generateId();
+    const summarySourceIds = sources.map((s) => s.id);
+
+    const nodeData = createQANodeData({
+      id: nodeId,
+      prompt: `Reference overview · ${sources.length} selected nodes`,
+      parentId: null,
+      branchColor: null,
+      summarySourceIds,
+    });
+
+    const avgX =
+      selected.reduce((acc, n) => acc + n.position.x, 0) / Math.max(selected.length, 1);
+    const bottomY = Math.max(...selected.map((n) => n.position.y)) + 420;
+
+    const newNode = createQAReactFlowNode(
+      nodeData,
+      { position: { x: avgX - 160, y: bottomY } },
+      { isLoading: true }
+    );
+
+    const edgeCommands: CanvasGraphCommand[] = summarySourceIds.map((sid) => ({
+      kind: 'add-edge' as const,
+      edge: createEdge(
+        sid,
+        nodeId,
+        { stroke: '#64748b', strokeWidth: 2, strokeDasharray: '4 4' },
+        '#64748b',
+        'Summarize source'
+      ),
+    }));
+
+    const batch: CanvasGraphCommand = {
+      kind: 'batch',
+      commands: [{ kind: 'append-nodes', nodes: [newNode] }, ...edgeCommands],
+    };
+
+    setStore(({ graph, timeline }) => {
+      const nextGraph = applyCanvasGraphCommand(graph, batch);
+      const nextTimeline = appendRevision(timeline, batch);
+
+      (async () => {
+        try {
+          const { response, keywords, title, followUpQuestions } =
+            await summarizeSelection(sources);
+          commit({
+            kind: 'patch-qa-data',
+            nodeId,
+            patch: {
+              aiResponse: response,
+              followUpQuestions,
+              keywords,
+              title: title || 'Summary',
+              isLoading: false,
+            },
+          });
+        } catch (err) {
+          console.error('Summarize failed:', err);
+          commit({
+            kind: 'patch-qa-data',
+            nodeId,
+            patch: {
+              isLoading: false,
+              hasFailed: true,
+              aiResponse:
+                'Could not summarize the selection. Check your API key in settings and try again.',
+            },
+          });
+        }
+      })();
+
+      return { graph: nextGraph, timeline: nextTimeline };
+    });
+  }, [commit]);
+
   const handleClearCanvas = useCallback(() => {
     if (
       window.confirm(
@@ -969,6 +1053,17 @@ export function useCanvasGraph() {
   const canUndo = canUndoTimeline(store.timeline);
   const canRedo = canRedoTimeline(store.timeline);
 
+  const selectionSummarize = useMemo(() => {
+    const selected = store.graph.nodes.filter((n) => n.selected);
+    const extracted = selected
+      .map(nodeToSummarizeSource)
+      .filter((s) => s != null);
+    return {
+      selectedCount: selected.length,
+      canSummarizeSelection: extracted.length >= 2,
+    };
+  }, [store.graph.nodes]);
+
   return {
     nodes: nodesWithCallbacks,
     edges: store.graph.edges,
@@ -980,6 +1075,9 @@ export function useCanvasGraph() {
     sparkQuestion,
     handleInitialSubmit,
     handleClearCanvas,
+    handleSummarizeSelection,
+    canSummarizeSelection: selectionSummarize.canSummarizeSelection,
+    selectedNodeCount: selectionSummarize.selectedCount,
     createNodeAt,
     canUndo,
     canRedo,

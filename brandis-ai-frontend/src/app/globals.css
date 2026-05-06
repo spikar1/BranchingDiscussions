@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+/* Include all app sources (hooks, etc.); v4 otherwise skips files matched by .gitignore heuristics in some setups. */
+@source "../**/*.{js,ts,jsx,tsx,mdx}";
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+}
+
 :root {
   --foreground-rgb: 30, 30, 30;
   --background-rgb: 250, 250, 252;

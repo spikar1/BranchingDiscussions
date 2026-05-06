@@ -84,3 +84,27 @@ export async function imagine(params: ImagineParams): Promise<ImagineResult> {
 
   return res.json();
 }
+
+type SummarizeSource = { id: string; label: string; text: string };
+
+type SummarizeResult = {
+  response: string;
+  keywords: SuggestedKeyword[];
+  title: string;
+  followUpQuestions: string[];
+};
+
+export async function summarizeSelection(sources: SummarizeSource[]): Promise<SummarizeResult> {
+  const res = await fetch('/api/summarize', {
+    method: 'POST',
+    headers: withByokHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ sources }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }));
+    throw new Error(err.error ?? `HTTP ${res.status}`);
+  }
+
+  return res.json();
+}

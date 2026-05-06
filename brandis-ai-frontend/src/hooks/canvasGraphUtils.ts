@@ -64,6 +64,9 @@ export function qaPayloadFromFlowData(
     branchedFromId: raw.branchedFromId,
     branchedFromText: raw.branchedFromText,
     branchColor: raw.branchColor,
+    summarySourceIds: Array.isArray(raw.summarySourceIds)
+      ? raw.summarySourceIds.filter((id): id is string => typeof id === 'string')
+      : undefined,
     createdAt: raw.createdAt instanceof Date ? raw.createdAt : new Date(String(raw.createdAt)),
   };
 }
@@ -214,6 +217,48 @@ export function findChildPosition(sourceNode: Node, existingSiblingCount: number
   };
 }
 
+export type SummarizeSourcePayload = {
+  id: string;
+  label: string;
+  text: string;
+};
+
+const MAX_SUMMARIZE_CHUNK = 12_000;
+
+/** Extract readable text from a canvas node for multi-node summarization (PRD §4.2). */
+export function nodeToSummarizeSource(node: Node): SummarizeSourcePayload | null {
+  if (node.type === 'qa') {
+    const d = qaPayloadFromFlowData(node.data as QAProductPayload & Record<string, unknown>);
+    const title = (d.title || '').trim();
+    const q = (d.userPrompt || '').trim();
+    const a = (d.aiResponse || '').trim();
+    const text = [title && `Title: ${title}`, q && `Question: ${q}`, a && `Answer:\n${a}`]
+      .filter(Boolean)
+      .join('\n\n')
+      .trim()
+      .slice(0, MAX_SUMMARIZE_CHUNK);
+    if (text.length < 8) return null;
+    return { id: node.id, label: title || q || 'Q&A', text };
+  }
+  if (node.type === 'note') {
+    const d = notePayloadFromFlowData(node.data as NoteProductPayload & Record<string, unknown>);
+    const text = (d.content || '').trim().slice(0, MAX_SUMMARIZE_CHUNK);
+    if (text.length < 8) return null;
+    return { id: node.id, label: 'Note', text };
+  }
+  if (node.type === 'image') {
+    const d = imagePayloadFromFlowData(node.data as ImageProductPayload & Record<string, unknown>);
+    const text = [d.title && `Title: ${d.title}`, d.prompt && `Prompt: ${d.prompt}`, d.context && `Context: ${d.context}`]
+      .filter(Boolean)
+      .join('\n\n')
+      .trim()
+      .slice(0, MAX_SUMMARIZE_CHUNK);
+    if (text.length < 8) return null;
+    return { id: node.id, label: d.title || 'Image', text };
+  }
+  return null;
+}
+
 export function createQANodeData(input: {
   id: string;
   prompt: string;
@@ -222,6 +267,7 @@ export function createQANodeData(input: {
   branchedFromId?: string | null;
   branchedFromText?: string | null;
   title?: string;
+  summarySourceIds?: string[];
 }): QAProductPayload {
   return {
     id: input.id,
@@ -236,6 +282,9 @@ export function createQANodeData(input: {
     branchedFromId: input.branchedFromId ?? null,
     branchedFromText: input.branchedFromText ?? null,
     branchColor: input.branchColor,
+    ...(input.summarySourceIds && input.summarySourceIds.length > 0
+      ? { summarySourceIds: [...input.summarySourceIds] }
+      : {}),
     createdAt: new Date(),
   };
 }

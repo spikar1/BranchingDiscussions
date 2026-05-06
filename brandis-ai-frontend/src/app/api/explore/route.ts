@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
 import { openaiFromRequest } from '@/app/api/_lib/openaiFromRequest';
+import { sanitizeHex } from '@/lib/colors';
+import { matchKeywordSpan } from '@/lib/keywordSpans';
 
 const RESPONSE_MODEL = 'gpt-4o-mini';
 const KEYWORD_MODEL = 'gpt-4o-mini';
@@ -121,7 +123,7 @@ export async function POST(req: Request) {
             'Return ONLY a JSON array of objects: [{"term": "exact term", "hex": "#abcdef"}]. ' +
             'Terms must appear exactly as in the text. No code syntax or variable names.',
         },
-        { role: 'user', content: proseOnly },
+        { role: 'user', content: response.slice(0, 14_000) },
       ],
       max_tokens: 250,
       temperature: 0.5,
@@ -144,16 +146,14 @@ export async function POST(req: Request) {
 
     const keywords = keywordEntries
       .map(({ term, hex }) => {
-        const lowerResponse = response.toLowerCase();
-        const lowerTerm = term.toLowerCase();
-        const index = lowerResponse.indexOf(lowerTerm);
-        if (index === -1) return null;
+        const span = matchKeywordSpan(response, term);
+        if (!span) return null;
         return {
-          id: `kw-${index}-${term.replace(/\s+/g, '-')}`,
-          term: response.substring(index, index + term.length),
-          startIndex: index,
-          endIndex: index + term.length,
-          hex,
+          id: `kw-${span.startIndex}-${span.term.replace(/\s+/g, '-')}`,
+          term: span.term,
+          startIndex: span.startIndex,
+          endIndex: span.endIndex,
+          hex: sanitizeHex(hex),
         };
       })
       .filter(Boolean)

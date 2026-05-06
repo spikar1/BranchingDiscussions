@@ -48,6 +48,8 @@ export type QAProductPayload = {
   branchedFromId: string | null;
   branchedFromText: string | null;
   branchColor: string | null;
+  /** Set when this Q&A node was created via Summarize selection — keeps provenance with edges to these node ids. */
+  summarySourceIds?: string[];
   createdAt: Date;
 };
 

@@ -11,7 +11,7 @@ import {
   QANodeRuntimeFlags,
   QAProductPayload,
 } from '@/types/canvas';
-import { getNextHex, tint, darken } from '@/lib/colors';
+import { getNextHex, tint, darken, sanitizeHex } from '@/lib/colors';
 import ColorPicker from './ColorPicker';
 import QANodeHeader from './QANodeHeader';
 import QANodeFollowUps from './QANodeFollowUps';
@@ -92,7 +92,9 @@ function QANode({ data }: QANodeProps) {
   const defaultHex = getNextHex(usedColorCount);
   const activeHex = selectedHex ?? defaultHex;
 
-  const nodeHex = data.branchColor || '#e5e7eb';
+  const summaryCount = (data.summarySourceIds ?? []).length;
+  const nodeHex =
+    data.branchColor || (summaryCount > 0 ? '#94a3b8' : '#e5e7eb');
 
   useEffect(() => {
     if (data.isAwaitingPrompt) {
@@ -310,6 +312,7 @@ function QANode({ data }: QANodeProps) {
           title={data.title}
           userPrompt={data.userPrompt}
           branchedFromText={data.branchedFromText}
+          summarySourceCount={(data.summarySourceIds ?? []).length}
           editingTitle={editingTitle}
           titleDraft={titleDraft}
           setTitleDraft={setTitleDraft}
@@ -459,7 +462,7 @@ function QANode({ data }: QANodeProps) {
                             );
                           }
                           if (span.type === 'keyword') {
-                            const kwHex = span.hex || '#f59e0b';
+                            const kwHex = sanitizeHex(span.hex, '#f59e0b');
                             const absStart = seg.offset + rangeOffset + span.start;
                             const absEnd = seg.offset + rangeOffset + span.end;
                             return (
@@ -490,7 +493,7 @@ function QANode({ data }: QANodeProps) {
                                 <ul key={`list-${seg.offset}-${bi}`} className="list-disc pl-5 space-y-0.5">
                                   {block.items.map((item, ii) => (
                                     <li key={`li-${seg.offset}-${bi}-${ii}`}>
-                                      {renderSpansForRange(item.offset - seg.offset, item.text.length, `li-${bi}-${ii}`)}
+                                      {renderSpansForRange(item.offset, item.text.length, `li-${bi}-${ii}`)}
                                     </li>
                                   ))}
                                 </ul>
@@ -498,7 +501,7 @@ function QANode({ data }: QANodeProps) {
                             }
                             return (
                               <p key={`p-${seg.offset}-${bi}`}>
-                                {renderSpansForRange(block.offset - seg.offset, block.text.length, `p-${bi}`)}
+                                {renderSpansForRange(block.offset, block.text.length, `p-${bi}`)}
                               </p>
                             );
                           })}
